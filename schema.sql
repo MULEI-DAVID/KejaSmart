@@ -122,4 +122,99 @@ CREATE TABLE login_attempts (
     attempt_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Landlords table
+CREATE TABLE landlords (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    phone VARCHAR(20),
+    status ENUM('pending', 'approved') DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Properties table
+CREATE TABLE properties (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    landlord_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    location VARCHAR(255),
+    number_of_units INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (landlord_id) REFERENCES landlords(id) ON DELETE CASCADE
+);
+
+-- Units table (optional if you want more control per unit)
+CREATE TABLE units (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    property_id INT NOT NULL,
+    unit_name VARCHAR(50),
+    status ENUM('vacant', 'occupied') DEFAULT 'vacant',
+    rent_amount DECIMAL(10,2),
+    FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE
+);
+
+-- Tenants table
+CREATE TABLE tenants (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    property_id INT NOT NULL,
+    unit_id INT DEFAULT NULL,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100),
+    phone VARCHAR(20),
+    rent_status ENUM('paid', 'due') DEFAULT 'due',
+    last_payment_date DATE DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE,
+    FOREIGN KEY (unit_id) REFERENCES units(id) ON DELETE SET NULL
+);
+
+-- Payments table
+CREATE TABLE payments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    property_id INT NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    date DATE DEFAULT CURRENT_DATE,
+    method ENUM('mpesa', 'cash', 'bank') DEFAULT 'mpesa',
+    status ENUM('completed', 'pending', 'failed') DEFAULT 'completed',
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE
+);
+
+-- Service Requests table
+CREATE TABLE service_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    property_id INT NOT NULL,
+    unit_id INT,
+    issue TEXT NOT NULL,
+    status ENUM('pending', 'in progress', 'completed') DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE,
+    FOREIGN KEY (unit_id) REFERENCES units(id) ON DELETE SET NULL
+);
+
+-- Lease Agreements table
+CREATE TABLE lease_agreements (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    expiry_date DATE,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+-- Messages & Notifications
+CREATE TABLE messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    sender_role ENUM('admin', 'landlord', 'tenant'),
+    receiver_role ENUM('admin', 'landlord', 'tenant'),
+    receiver_id INT,
+    subject VARCHAR(255),
+    body TEXT,
+    is_read BOOLEAN DEFAULT FALSE,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
