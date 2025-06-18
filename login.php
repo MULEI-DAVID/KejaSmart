@@ -1,6 +1,30 @@
 <?php
+// Secure session settings
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'domain' => '',
+    'secure' => true,
+    'httponly' => true,
+    'samesite' => 'Strict'
+]);
+ini_set('session.cookie_secure', 1);
+ini_set('session.cookie_httponly', 1);
+ini_set('session.use_strict_mode', 1);
 session_start();
+
+// Security headers
+header("X-Frame-Options: DENY");
+header("X-Content-Type-Options: nosniff");
+header("Referrer-Policy: strict-origin-when-cross-origin");
+header("Content-Security-Policy: default-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com");
+
 require_once 'config.php';
+
+// Generate CSRF token if not exists
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
 $errors = [];
 
@@ -11,79 +35,117 @@ if (isset($_COOKIE['remember_email'])) {
     $rememberedEmail = '';
 }
 
-// Rate-limiting: check failed attempts
-function isLockedOut($conn, $email) {
-    $stmt = $conn->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND success = 0 AND attempt_time > (NOW() - INTERVAL 15 MINUTE)");
-    $stmt->bind_param("s", $email);
+// Rate-limiting: check failed attempts (both by email and IP)
+function isLockedOut($conn, $email, $ip) {
+    // Check by email
+    $stmt = $conn->prepare("SELECT COUNT(*) FROM login_attempts WHERE (email = ? OR ip_address = ?) AND success = 0 AND attempt_time > (NOW() - INTERVAL 15 MINUTE)");
+    $stmt->bind_param("ss", $email, $ip);
     $stmt->execute();
     $stmt->bind_result($attempts);
     $stmt->fetch();
     $stmt->close();
-    return $attempts >= 3;
+    
+    if ($attempts >= 5) {
+        return true;
+    }
+    
+    // Progressive delay for 2-4 failed attempts
+    if ($attempts >= 2) {
+        $delay = min(($attempts - 1) * 5, 15); // 5, 10, 15 seconds
+        sleep($delay);
+    }
+    
+    return false;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = trim($_POST['email']);
-    $password = $_POST['password'];
-    $remember = isset($_POST['remember']);
-
-    if (isLockedOut($conn, $email)) {
-        $errors[] = "Too many failed attempts. Please try again after 15 minutes.";
+    // CSRF token validation
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        $errors[] = "Invalid request. Please try again.";
     } else {
-        // Check in all user tables (admin, landlord, tenant)
-        $userTables = [
-            ['table' => 'admins', 'redirect' => 'admin_dashboard.php'],
-            ['table' => 'landlords', 'redirect' => 'landlord_dashboard.php'],
-            ['table' => 'tenants', 'redirect' => 'tenant_dashboard.php']
-        ];
+        $email = trim($_POST['email']);
+        $password = $_POST['password'];
+        $remember = isset($_POST['remember']);
+        $ip_address = $_SERVER['REMOTE_ADDR'];
 
-        $loginSuccess = false;
+        if (isLockedOut($conn, $email, $ip_address)) {
+            $errors[] = "Too many failed attempts. Please try again after 15 minutes.";
+        } else {
+            // Check in all user tables (admin, landlord, tenant)
+            $validUserTypes = [
+                ['table' => 'admins', 'redirect' => 'admin_dashboard.php'],
+                ['table' => 'landlords', 'redirect' => 'landlord_dashboard.php'],
+                ['table' => 'tenants', 'redirect' => 'tenant_dashboard.php']
+            ];
 
-        foreach ($userTables as $userType) {
-            $stmt = $conn->prepare("SELECT id, password, status FROM {$userType['table']} WHERE email = ?");
-            $stmt->bind_param("s", $email);
-            $stmt->execute();
-            $stmt->store_result();
+            $loginSuccess = false;
+            $genericError = "Invalid email or password."; // Generic error message
 
-            if ($stmt->num_rows === 1) {
-                $stmt->bind_result($id, $hashed_password, $status);
-                $stmt->fetch();
-
-                if ($userType['table'] === 'landlords' && $status !== 'approved') {
-                    $errors[] = "Landlord account pending approval.";
-                } elseif (password_verify($password, $hashed_password)) {
-                    // Success
-                    $_SESSION['user_id'] = $id;
-                    $_SESSION['user_type'] = $userType['table'];
-                    $_SESSION['email'] = $email;
-
-                    if ($remember) {
-                        setcookie("remember_email", $email, time() + (86400 * 30), "/"); // 30 days
-                    } else {
-                        setcookie("remember_email", "", time() - 3600, "/"); // Delete
-                    }
-
-                    // Log success
-                    $logStmt = $conn->prepare("INSERT INTO login_attempts (email, success) VALUES (?, 1)");
-                    $logStmt->bind_param("s", $email);
-                    $logStmt->execute();
-                    $logStmt->close();
-
-                    header("Location: " . $userType['redirect']);
-                    exit();
-                } else {
-                    $errors[] = "Incorrect password.";
+            foreach ($validUserTypes as $userType) {
+                // Validate table name against whitelist
+                if (!in_array($userType['table'], ['admins', 'landlords', 'tenants'])) {
+                    continue;
                 }
-            }
-            $stmt->close();
-        }
 
-        if (!empty($errors)) {
-            // Log failed attempt
-            $logStmt = $conn->prepare("INSERT INTO login_attempts (email, success) VALUES (?, 0)");
-            $logStmt->bind_param("s", $email);
-            $logStmt->execute();
-            $logStmt->close();
+                $stmt = $conn->prepare("SELECT id, password, status FROM " . $userType['table'] . " WHERE email = ?");
+                $stmt->bind_param("s", $email);
+                $stmt->execute();
+                $stmt->store_result();
+
+                if ($stmt->num_rows === 1) {
+                    $stmt->bind_result($id, $hashed_password, $status);
+                    $stmt->fetch();
+
+                    if ($userType['table'] === 'landlords' && $status !== 'approved') {
+                        $errors[] = "Landlord account pending approval.";
+                    } elseif (password_verify($password, $hashed_password)) {
+                        // Regenerate session ID to prevent session fixation
+                        session_regenerate_id(true);
+
+                        // Success
+                        $_SESSION['user_id'] = $id;
+                        $_SESSION['user_type'] = $userType['table'];
+                        $_SESSION['email'] = $email;
+                        $_SESSION['last_activity'] = time();
+
+                        if ($remember) {
+                            setcookie("remember_email", $email, [
+                                'expires' => time() + (86400 * 30),
+                                'path' => '/',
+                                'secure' => true,
+                                'httponly' => true,
+                                'samesite' => 'Strict'
+                            ]);
+                        } else {
+                            setcookie("remember_email", "", [
+                                'expires' => time() - 3600,
+                                'path' => '/'
+                            ]);
+                        }
+
+                        // Log success with IP
+                        $logStmt = $conn->prepare("INSERT INTO login_attempts (email, ip_address, success) VALUES (?, ?, 1)");
+                        $logStmt->bind_param("ss", $email, $ip_address);
+                        $logStmt->execute();
+                        $logStmt->close();
+
+                        header("Location: " . $userType['redirect']);
+                        exit();
+                    }
+                }
+                $stmt->close();
+            }
+
+            if (empty($errors)) {
+                // Log failed attempt with IP
+                $logStmt = $conn->prepare("INSERT INTO login_attempts (email, ip_address, success) VALUES (?, ?, 0)");
+                $logStmt->bind_param("ss", $email, $ip_address);
+                $logStmt->execute();
+                $logStmt->close();
+                
+                // Use generic error message to avoid revealing if email exists
+                $errors[] = $genericError;
+            }
         }
     }
 }
@@ -184,13 +246,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <?php endif; ?>
 
       <form method="POST" action="">
+        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token'] ?? '') ?>">
         <div class="mb-3">
           <label for="email" class="form-label">Email address</label>
           <input type="email" class="form-control" name="email" id="email" value="<?= htmlspecialchars($rememberedEmail) ?>" required />
         </div>
         <div class="mb-3">
           <label for="password" class="form-label">Password</label>
-          <input type="password" class="form-control" name="password" id="password" required />
+          <input type="password" class="form-control" name="password" id="password" required minlength="8" />
+          <div class="form-text">Minimum 8 characters</div>
         </div>
         <div class="form-check mb-4">
           <input type="checkbox" class="form-check-input" name="remember" id="remember" <?= $rememberedEmail ? 'checked' : '' ?>>
@@ -200,7 +264,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <button type="submit" class="btn btn-theme">Login</button>
         </div>
         <div class="text-center mt-3">
-          <small>Don't have an account? <a href="register.php">Register here</a></small>
+          <small>Don't have an account? <a href="register.php">Register here</a></small><br>
+          <small><a href="forgot_password.php">Forgot password?</a></small>
         </div>
       </form>
     </div>
