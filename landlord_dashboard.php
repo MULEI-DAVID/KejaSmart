@@ -1,185 +1,445 @@
 <?php
-// Simulate session and database for demonstration
-session_start();
+// Database configuration
+define('DB_HOST', 'localhost');
+define('DB_USER', 'root');
+define('DB_PASS', 'password');
+define('DB_NAME', 'kejasmart');
+define('DB_CHARSET', 'utf8mb4');
 
-// Simulate user authentication
-if (!isset($_SESSION['landlord_id'])) {
-    $_SESSION['landlord_id'] = 1;
-    $_SESSION['first_login'] = true;
+// Establish database connection
+try {
+    $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+    $pdo = new PDO($dsn, DB_USER, DB_PASS);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Database connection failed: " . $e->getMessage());
+    die("Database connection error. Please try again later.");
 }
 
-// Simulate user data
-$landlord = [
-    'id' => 1,
-    'full_name' => 'Jane Smith',
-    'email' => 'jane@example.com',
-    'phone' => '+254 712 345 678',
-    'join_date' => '2023-01-15'
-];
+// Start session
+session_start();
 
-// Dashboard stats (simulated)
-$propertiesCount = 3;
-$tenantsCount = 12;
-$activeLeases = 8;
-$totalPayments = 185600;
-$pendingRequests = 2;
+// Check if user is logged in
+if (!isset($_SESSION['user_id']) {
+    header("Location: login.php");
+    exit();
+}
 
-// Properties data
-$properties = [
-    [
-        'id' => 1,
-        'name' => 'Greenview Apartments',
-        'location' => 'Westlands, Nairobi',
-        'units' => 12,
-        'occupied' => 11,
-        'monthly_rent' => 285000,
-        'type' => 'Apartment Building'
-    ],
-    [
-        'id' => 2,
-        'name' => 'Riverfront Villas',
-        'location' => 'Karen, Nairobi',
-        'units' => 8,
-        'occupied' => 6,
-        'monthly_rent' => 245000,
-        'type' => 'Townhouses'
-    ],
-    [
-        'id' => 3,
-        'name' => 'Sunset Heights',
-        'location' => 'Kilimani, Nairobi',
-        'units' => 6,
-        'occupied' => 6,
-        'monthly_rent' => 252000,
-        'type' => 'Apartment Building'
-    ]
-];
+// Get user information
+$user_id = $_SESSION['user_id'];
+$stmt = $pdo->prepare("SELECT users.*, landlords.* FROM users 
+                      JOIN landlords ON users.id = landlords.id 
+                      WHERE users.id = ?");
+$stmt->execute([$user_id]);
+$landlord = $stmt->fetch();
 
-// Tenants data
-$tenants = [
-    [
-        'id' => 1,
-        'name' => 'John Kamau',
-        'property' => 'Greenview Apartments',
-        'unit' => '4B',
-        'rent_due' => 25000,
-        'status' => 'current',
-        'lease_end' => '2024-01-14'
-    ],
-    [
-        'id' => 2,
-        'name' => 'Sarah Wanjiku',
-        'property' => 'Riverfront Villas',
-        'unit' => '2A',
-        'rent_due' => 35000,
-        'status' => 'overdue',
-        'lease_end' => '2024-02-28'
-    ],
-    [
-        'id' => 3,
-        'name' => 'David Ochieng',
-        'property' => 'Sunset Heights',
-        'unit' => '5C',
-        'rent_due' => 42000,
-        'status' => 'current',
-        'lease_end' => '2023-12-15'
-    ]
-];
-
-// Recent payments
-$recentPayments = [
-    [
-        'date' => '2023-10-15',
-        'tenant' => 'John Kamau',
-        'property' => 'Greenview Apartments',
-        'amount' => 25000,
-        'method' => 'M-PESA',
-        'status' => 'completed'
-    ],
-    [
-        'date' => '2023-10-14',
-        'tenant' => 'Sarah Wanjiku',
-        'property' => 'Riverfront Villas',
-        'amount' => 35000,
-        'method' => 'Bank Transfer',
-        'status' => 'completed'
-    ],
-    [
-        'date' => '2023-10-12',
-        'tenant' => 'David Ochieng',
-        'property' => 'Sunset Heights',
-        'amount' => 42000,
-        'method' => 'M-PESA',
-        'status' => 'completed'
-    ]
-];
-
-// Maintenance requests
-$maintenanceRequests = [
-    [
-        'id' => 1,
-        'date' => '2023-10-14',
-        'property' => 'Greenview Apartments',
-        'unit' => '4B',
-        'description' => 'Kitchen sink leaking',
-        'urgency' => 'High',
-        'status' => 'pending'
-    ],
-    [
-        'id' => 2,
-        'date' => '2023-10-12',
-        'property' => 'Riverfront Villas',
-        'unit' => '2A',
-        'description' => 'AC not cooling properly',
-        'urgency' => 'Medium',
-        'status' => 'in-progress'
-    ],
-    [
-        'id' => 3,
-        'date' => '2023-10-10',
-        'property' => 'Sunset Heights',
-        'unit' => '5C',
-        'description' => 'Broken window in living room',
-        'urgency' => 'High',
-        'status' => 'completed'
-    ]
-];
-
-// Check if first login
-$firstLogin = isset($_SESSION['first_login']) ? $_SESSION['first_login'] : true;
-unset($_SESSION['first_login']);
+if (!$landlord) {
+    header("Location: login.php");
+    exit();
+}
 
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Add new property
     if (isset($_POST['add_property'])) {
-        // Add new property
-        $newProperty = [
-            'id' => count($properties) + 1,
-            'name' => $_POST['property_name'],
-            'location' => $_POST['location'],
-            'units' => (int)$_POST['units'],
-            'occupied' => 0,
-            'monthly_rent' => 0,
-            'type' => $_POST['property_type']
-        ];
-        $properties[] = $newProperty;
-        $propertiesCount = count($properties);
-        $firstLogin = false;
-    } elseif (isset($_POST['add_tenant'])) {
-        // Add new tenant
-        $newTenant = [
-            'id' => count($tenants) + 1,
-            'name' => $_POST['full_name'],
-            'property' => $_POST['property'],
-            'unit' => $_POST['unit'],
-            'rent_due' => (int)$_POST['rent_due'],
-            'status' => 'current',
-            'lease_end' => $_POST['lease_end']
-        ];
-        $tenants[] = $newTenant;
-        $tenantsCount = count($tenants);
+        $name = $_POST['property_name'];
+        $location = $_POST['location'];
+        $county = $_POST['county'];
+        $town = $_POST['town'];
+        $units = (int)$_POST['units'];
+        $category_id = (int)$_POST['category_id'];
+        $description = $_POST['description'] ?? '';
+        
+        $stmt = $pdo->prepare("INSERT INTO properties (landlord_id, category_id, name, description, location, county, town, number_of_units) 
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$landlord['id'], $category_id, $name, $description, $location, $county, $town, $units]);
+        
+        $_SESSION['success'] = "Property added successfully!";
+        header("Location: dashboard.php");
+        exit();
+    }
+    
+    // Add new tenant
+    if (isset($_POST['add_tenant'])) {
+        $first_name = $_POST['first_name'];
+        $last_name = $_POST['last_name'];
+        $email = $_POST['email'];
+        $phone = $_POST['phone'];
+        $national_id = $_POST['national_id'];
+        $unit_id = (int)$_POST['unit_id'];
+        $rent_due = (float)$_POST['rent_due'];
+        
+        // Create user account first
+        $password = password_hash('TempPass123', PASSWORD_DEFAULT); // Temporary password
+        $stmt = $pdo->prepare("INSERT INTO users (email, password, user_type) VALUES (?, ?, 'tenant')");
+        $stmt->execute([$email, $password]);
+        $tenant_user_id = $pdo->lastInsertId();
+        
+        // Create tenant profile
+        $stmt = $pdo->prepare("INSERT INTO tenants (id, first_name, last_name, phone, national_id) 
+                              VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$tenant_user_id, $first_name, $last_name, $phone, $national_id]);
+        
+        // Create lease agreement
+        $start_date = date('Y-m-d');
+        $end_date = date('Y-m-d', strtotime('+1 year'));
+        $stmt = $pdo->prepare("INSERT INTO leases (tenant_id, unit_id, start_date, end_date, monthly_rent, status) 
+                              VALUES (?, ?, ?, ?, ?, 'active')");
+        $stmt->execute([$tenant_user_id, $unit_id, $start_date, $end_date, $rent_due]);
+        
+        // Update unit status
+        $stmt = $pdo->prepare("UPDATE units SET status = 'occupied' WHERE id = ?");
+        $stmt->execute([$unit_id]);
+        
+        $_SESSION['success'] = "Tenant added successfully!";
+        header("Location: dashboard.php?section=tenants");
+        exit();
+    }
+    
+    // Record payment
+    if (isset($_POST['record_payment'])) {
+        $lease_id = (int)$_POST['lease_id'];
+        $amount = (float)$_POST['amount'];
+        $method = $_POST['method'];
+        $reference = $_POST['reference'] ?? '';
+        
+        $stmt = $pdo->prepare("INSERT INTO payments (lease_id, amount, payment_date, payment_method, reference_number, status, recorded_by) 
+                              VALUES (?, ?, CURDATE(), ?, ?, 'completed', ?)");
+        $stmt->execute([$lease_id, $amount, $method, $reference, $landlord['id']]);
+        
+        $_SESSION['success'] = "Payment recorded successfully!";
+        header("Location: dashboard.php?section=payments");
+        exit();
+    }
+    
+    // Create maintenance request
+    if (isset($_POST['create_request'])) {
+        $unit_id = (int)$_POST['unit_id'];
+        $title = $_POST['title'];
+        $description = $_POST['description'];
+        $urgency = $_POST['urgency'];
+        
+        // Get tenant ID for the unit
+        $stmt = $pdo->prepare("SELECT tenant_id FROM leases 
+                              WHERE unit_id = ? AND status = 'active' 
+                              ORDER BY end_date DESC LIMIT 1");
+        $stmt->execute([$unit_id]);
+        $lease = $stmt->fetch();
+        $tenant_id = $lease ? $lease['tenant_id'] : null;
+        
+        $stmt = $pdo->prepare("INSERT INTO maintenance_requests (tenant_id, unit_id, title, description, urgency) 
+                              VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$tenant_id, $unit_id, $title, $description, $urgency]);
+        
+        $_SESSION['success'] = "Maintenance request created!";
+        header("Location: dashboard.php?section=maintenance");
+        exit();
+    }
+    
+    // Update maintenance status
+    if (isset($_POST['update_request'])) {
+        $request_id = (int)$_POST['request_id'];
+        $status = $_POST['status'];
+        
+        $stmt = $pdo->prepare("UPDATE maintenance_requests SET status = ? WHERE id = ?");
+        $stmt->execute([$status, $request_id]);
+        
+        $_SESSION['success'] = "Maintenance request updated!";
+        header("Location: dashboard.php?section=maintenance");
+        exit();
+    }
+    
+    // Update profile
+    if (isset($_POST['update_profile'])) {
+        $first_name = $_POST['first_name'];
+        $last_name = $_POST['last_name'];
+        $phone = $_POST['phone'];
+        $email = $_POST['email'];
+        $national_id = $_POST['national_id'];
+        $kra_pin = $_POST['kra_pin'] ?? '';
+        $address = $_POST['address'] ?? '';
+        $county = $_POST['county'] ?? '';
+        
+        // Update users table
+        $stmt = $pdo->prepare("UPDATE users SET email = ? WHERE id = ?");
+        $stmt->execute([$email, $landlord['id']]);
+        
+        // Update landlords table
+        $stmt = $pdo->prepare("UPDATE landlords SET first_name = ?, last_name = ?, phone = ?, national_id = ?, kra_pin = ?, address = ?, county = ? 
+                              WHERE id = ?");
+        $stmt->execute([$first_name, $last_name, $phone, $national_id, $kra_pin, $address, $county, $landlord['id']]);
+        
+        $_SESSION['success'] = "Profile updated successfully!";
+        header("Location: dashboard.php?section=profile");
+        exit();
+    }
+    
+    // Change password
+    if (isset($_POST['change_password'])) {
+        $current_password = $_POST['current_password'];
+        $new_password = $_POST['new_password'];
+        $confirm_password = $_POST['confirm_password'];
+        
+        if ($new_password !== $confirm_password) {
+            $_SESSION['error'] = "New passwords do not match!";
+            header("Location: dashboard.php?section=profile");
+            exit();
+        }
+        
+        // Verify current password
+        $stmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
+        $stmt->execute([$landlord['id']]);
+        $user = $stmt->fetch();
+        
+        if (!$user || !password_verify($current_password, $user['password'])) {
+            $_SESSION['error'] = "Current password is incorrect!";
+            header("Location: dashboard.php?section=profile");
+            exit();
+        }
+        
+        // Update password
+        $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+        $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
+        $stmt->execute([$hashed_password, $landlord['id']]);
+        
+        $_SESSION['success'] = "Password changed successfully!";
+        header("Location: dashboard.php?section=profile");
+        exit();
     }
 }
+
+// Determine current section
+$section = $_GET['section'] ?? 'dashboard';
+$valid_sections = ['dashboard', 'properties', 'tenants', 'leases', 'payments', 'maintenance', 'reports', 'profile'];
+if (!in_array($section, $valid_sections)) {
+    $section = 'dashboard';
+}
+
+// Fetch data for dashboard
+$propertiesCount = 0;
+$tenantsCount = 0;
+$activeLeases = 0;
+$totalPayments = 0;
+$pendingRequests = 0;
+
+if ($section === 'dashboard') {
+    // Count properties
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM properties WHERE landlord_id = ?");
+    $stmt->execute([$landlord['id']]);
+    $propertiesCount = $stmt->fetchColumn();
+
+    // Count tenants
+    $stmt = $pdo->prepare("SELECT COUNT(DISTINCT leases.tenant_id) 
+                          FROM leases 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND leases.status = 'active'");
+    $stmt->execute([$landlord['id']]);
+    $tenantsCount = $stmt->fetchColumn();
+
+    // Count active leases
+    $stmt = $pdo->prepare("SELECT COUNT(*) 
+                          FROM leases 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND leases.status = 'active'");
+    $stmt->execute([$landlord['id']]);
+    $activeLeases = $stmt->fetchColumn();
+
+    // Total payments
+    $stmt = $pdo->prepare("SELECT COALESCE(SUM(payments.amount), 0) 
+                          FROM payments 
+                          JOIN leases ON payments.lease_id = leases.id 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND payments.status = 'completed'");
+    $stmt->execute([$landlord['id']]);
+    $totalPayments = $stmt->fetchColumn();
+
+    // Pending maintenance requests
+    $stmt = $pdo->prepare("SELECT COUNT(*) 
+                          FROM maintenance_requests 
+                          JOIN units ON maintenance_requests.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND maintenance_requests.status = 'pending'");
+    $stmt->execute([$landlord['id']]);
+    $pendingRequests = $stmt->fetchColumn();
+
+    // Recent payments
+    $stmt = $pdo->prepare("SELECT payments.*, tenants.first_name, tenants.last_name, properties.name AS property_name 
+                          FROM payments 
+                          JOIN leases ON payments.lease_id = leases.id 
+                          JOIN tenants ON leases.tenant_id = tenants.id 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? 
+                          ORDER BY payments.payment_date DESC 
+                          LIMIT 5");
+    $stmt->execute([$landlord['id']]);
+    $recentPayments = $stmt->fetchAll();
+
+    // Pending maintenance requests
+    $stmt = $pdo->prepare("SELECT maintenance_requests.*, properties.name AS property_name, units.name AS unit_name 
+                          FROM maintenance_requests 
+                          JOIN units ON maintenance_requests.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND maintenance_requests.status = 'pending' 
+                          ORDER BY maintenance_requests.created_at DESC 
+                          LIMIT 5");
+    $stmt->execute([$landlord['id']]);
+    $maintenanceRequests = $stmt->fetchAll();
+}
+
+// Fetch data for properties section
+if ($section === 'properties') {
+    $stmt = $pdo->prepare("SELECT properties.*, property_categories.name AS category_name 
+                          FROM properties 
+                          LEFT JOIN property_categories ON properties.category_id = property_categories.id 
+                          WHERE landlord_id = ?");
+    $stmt->execute([$landlord['id']]);
+    $properties = $stmt->fetchAll();
+    
+    // Get categories for dropdown
+    $stmt = $pdo->prepare("SELECT * FROM property_categories");
+    $stmt->execute();
+    $categories = $stmt->fetchAll();
+}
+
+// Fetch data for tenants section
+if ($section === 'tenants') {
+    $stmt = $pdo->prepare("SELECT tenants.*, leases.id AS lease_id, leases.monthly_rent, leases.start_date, leases.end_date, 
+                          units.name AS unit_name, properties.name AS property_name 
+                          FROM tenants 
+                          JOIN leases ON tenants.id = leases.tenant_id 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND leases.status = 'active'");
+    $stmt->execute([$landlord['id']]);
+    $tenants = $stmt->fetchAll();
+    
+    // Get available units for adding tenant
+    $stmt = $pdo->prepare("SELECT units.id, units.name, properties.name AS property_name 
+                          FROM units 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND units.status = 'vacant'");
+    $stmt->execute([$landlord['id']]);
+    $vacantUnits = $stmt->fetchAll();
+}
+
+// Fetch data for leases section
+if ($section === 'leases') {
+    $stmt = $pdo->prepare("SELECT leases.*, tenants.first_name, tenants.last_name, 
+                          units.name AS unit_name, properties.name AS property_name 
+                          FROM leases 
+                          JOIN tenants ON leases.tenant_id = tenants.id 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? 
+                          ORDER BY leases.end_date DESC");
+    $stmt->execute([$landlord['id']]);
+    $leases = $stmt->fetchAll();
+}
+
+// Fetch data for payments section
+if ($section === 'payments') {
+    $stmt = $pdo->prepare("SELECT payments.*, tenants.first_name, tenants.last_name, 
+                          properties.name AS property_name, units.name AS unit_name 
+                          FROM payments 
+                          JOIN leases ON payments.lease_id = leases.id 
+                          JOIN tenants ON leases.tenant_id = tenants.id 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? 
+                          ORDER BY payments.payment_date DESC");
+    $stmt->execute([$landlord['id']]);
+    $payments = $stmt->fetchAll();
+    
+    // Get active leases for recording payments
+    $stmt = $pdo->prepare("SELECT leases.id, tenants.first_name, tenants.last_name, units.name AS unit_name 
+                          FROM leases 
+                          JOIN tenants ON leases.tenant_id = tenants.id 
+                          JOIN units ON leases.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? AND leases.status = 'active'");
+    $stmt->execute([$landlord['id']]);
+    $activeLeasesList = $stmt->fetchAll();
+}
+
+// Fetch data for maintenance section
+if ($section === 'maintenance') {
+    $stmt = $pdo->prepare("SELECT maintenance_requests.*, tenants.first_name, tenants.last_name, 
+                          properties.name AS property_name, units.name AS unit_name 
+                          FROM maintenance_requests 
+                          LEFT JOIN tenants ON maintenance_requests.tenant_id = tenants.id 
+                          JOIN units ON maintenance_requests.unit_id = units.id 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ? 
+                          ORDER BY maintenance_requests.created_at DESC");
+    $stmt->execute([$landlord['id']]);
+    $maintenanceList = $stmt->fetchAll();
+    
+    // Get units for creating maintenance requests
+    $stmt = $pdo->prepare("SELECT units.id, units.name, properties.name AS property_name 
+                          FROM units 
+                          JOIN properties ON units.property_id = properties.id 
+                          WHERE properties.landlord_id = ?");
+    $stmt->execute([$landlord['id']]);
+    $allUnits = $stmt->fetchAll();
+}
+
+// Fetch data for reports section
+if ($section === 'reports') {
+    // Income report (last 6 months)
+    $incomeReport = [];
+    for ($i = 5; $i >= 0; $i--) {
+        $month = date('Y-m', strtotime("-$i months"));
+        $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) AS total 
+                              FROM payments 
+                              JOIN leases ON payments.lease_id = leases.id 
+                              JOIN units ON leases.unit_id = units.id 
+                              JOIN properties ON units.property_id = properties.id 
+                              WHERE properties.landlord_id = ? 
+                              AND DATE_FORMAT(payment_date, '%Y-%m') = ?");
+        $stmt->execute([$landlord['id'], $month]);
+        $result = $stmt->fetch();
+        $incomeReport[] = [
+            'month' => $month,
+            'amount' => $result['total']
+        ];
+    }
+    
+    // Occupancy rate
+    $stmt = $pdo->prepare("SELECT 
+                          (SELECT COUNT(*) FROM units 
+                           JOIN properties ON units.property_id = properties.id 
+                           WHERE properties.landlord_id = ? AND units.status = 'occupied') AS occupied,
+                          (SELECT COUNT(*) FROM units 
+                           JOIN properties ON units.property_id = properties.id 
+                           WHERE properties.landlord_id = ?) AS total");
+    $stmt->execute([$landlord['id'], $landlord['id']]);
+    $occupancy = $stmt->fetch();
+    $occupancyRate = $occupancy['total'] > 0 ? round(($occupancy['occupied'] / $occupancy['total']) * 100) : 0;
+    
+    // Payment status
+    $stmt = $pdo->prepare("SELECT 
+                          (SELECT COUNT(*) FROM leases 
+                           JOIN units ON leases.unit_id = units.id 
+                           JOIN properties ON units.property_id = properties.id 
+                           WHERE properties.landlord_id = ? AND leases.status = 'active'
+                           AND CURDATE() <= DATE_ADD(leases.start_date, INTERVAL 5 DAY)) AS on_time,
+                          (SELECT COUNT(*) FROM leases 
+                           JOIN units ON leases.unit_id = units.id 
+                           JOIN properties ON units.property_id = properties.id 
+                           WHERE properties.landlord_id = ? AND leases.status = 'active'
+                           AND CURDATE() > DATE_ADD(leases.start_date, INTERVAL 5 DAY)) AS late");
+    $stmt->execute([$landlord['id'], $landlord['id']]);
+    $paymentStatus = $stmt->fetch();
+}
+
+// Check if first login
+$firstLogin = isset($_SESSION['first_login']) ? $_SESSION['first_login'] : false;
+unset($_SESSION['first_login']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -865,10 +1125,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             <div class="user-profile">
                 <div class="user-avatar">
-                    <?= substr($landlord['full_name'], 0, 1) ?>
+                    <?= substr($landlord['first_name'], 0, 1) . substr($landlord['last_name'], 0, 1) ?>
                 </div>
                 <div class="user-details">
-                    <h3><?= htmlspecialchars($landlord['full_name']) ?></h3>
+                    <h3><?= htmlspecialchars($landlord['first_name'] . ' ' . $landlord['last_name']) ?></h3>
                     <p>Landlord</p>
                 </div>
             </div>
@@ -882,47 +1142,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="sidebar" id="sidebar">
         <ul class="sidebar-menu">
             <li>
-                <a href="#" class="menu-item active" data-section="dashboard">
+                <a href="?section=dashboard" class="menu-item <?= $section === 'dashboard' ? 'active' : '' ?>" data-section="dashboard">
                     <i class="fas fa-tachometer-alt"></i> Dashboard
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="properties">
+                <a href="?section=properties" class="menu-item <?= $section === 'properties' ? 'active' : '' ?>" data-section="properties">
                     <i class="fas fa-home"></i> Properties
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="tenants">
+                <a href="?section=tenants" class="menu-item <?= $section === 'tenants' ? 'active' : '' ?>" data-section="tenants">
                     <i class="fas fa-users"></i> Tenants
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="leases">
+                <a href="?section=leases" class="menu-item <?= $section === 'leases' ? 'active' : '' ?>" data-section="leases">
                     <i class="fas fa-file-contract"></i> Leases
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="payments">
+                <a href="?section=payments" class="menu-item <?= $section === 'payments' ? 'active' : '' ?>" data-section="payments">
                     <i class="fas fa-money-bill-wave"></i> Payments
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="maintenance">
+                <a href="?section=maintenance" class="menu-item <?= $section === 'maintenance' ? 'active' : '' ?>" data-section="maintenance">
                     <i class="fas fa-tools"></i> Maintenance
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="reports">
+                <a href="?section=reports" class="menu-item <?= $section === 'reports' ? 'active' : '' ?>" data-section="reports">
                     <i class="fas fa-chart-bar"></i> Reports
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="profile">
+                <a href="?section=profile" class="menu-item <?= $section === 'profile' ? 'active' : '' ?>" data-section="profile">
                     <i class="fas fa-user"></i> My Profile
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item">
+                <a href="logout.php" class="menu-item">
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
             </li>
@@ -936,18 +1196,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <!-- Main Content -->
     <div class="main-content" id="mainContent">
+        <!-- Success/Error messages -->
+        <?php if (isset($_SESSION['success'])): ?>
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                <?= $_SESSION['success'] ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            <?php unset($_SESSION['success']); ?>
+        <?php endif; ?>
+        
+        <?php if (isset($_SESSION['error'])): ?>
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <?= $_SESSION['error'] ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            <?php unset($_SESSION['error']); ?>
+        <?php endif; ?>
+        
         <!-- Dashboard Section -->
-        <div class="dashboard-section active" id="dashboard-section">
+        <div class="dashboard-section <?= $section === 'dashboard' ? 'active' : '' ?>" id="dashboard-section">
             <?php if ($firstLogin): ?>
                 <div class="welcome-message">
-                    <h2>Welcome to KejaSmart, <?= htmlspecialchars($landlord['full_name']) ?>!</h2>
+                    <h2>Welcome to KejaSmart, <?= htmlspecialchars($landlord['first_name']) ?>!</h2>
                     <p>We're excited to help you manage your properties efficiently. Let's get started by setting up your first property and tenant information.</p>
                     <button class="btn btn-light">Get Started Guide</button>
                 </div>
             <?php endif; ?>
             
             <div class="welcome">
-                <h1>Welcome back, <?= htmlspecialchars($landlord['full_name']) ?>!</h1>
+                <h1>Welcome back, <?= htmlspecialchars($landlord['first_name']) ?>!</h1>
                 <p>Here's what's happening with your properties today</p>
             </div>
             
@@ -976,7 +1253,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="step-description">Create tenant profiles and assign them to your properties.</div>
                         </div>
                         <div class="step-action">
-                            <button class="btn btn-outline-primary" disabled>Next Step</button>
+                            <button class="btn btn-outline-primary" id="addTenantBtn">Add Tenant</button>
                         </div>
                     </div>
                     
@@ -989,7 +1266,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="step-description">Set up lease terms and rental agreements for your tenants.</div>
                         </div>
                         <div class="step-action">
-                            <button class="btn btn-outline-primary" disabled>Next Step</button>
+                            <button class="btn btn-outline-primary" id="createLeaseBtn">Create Lease</button>
                         </div>
                     </div>
                     
@@ -1002,7 +1279,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="step-description">Set up your preferred payment methods and rental rates.</div>
                         </div>
                         <div class="step-action">
-                            <button class="btn btn-outline-primary" disabled>Next Step</button>
+                            <button class="btn btn-outline-primary">Next Step</button>
                         </div>
                     </div>
                 </div>
@@ -1059,7 +1336,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="table-container">
                         <div class="table-header p-3 d-flex justify-content-between align-items-center">
                             <h5 class="mb-0">Recent Payments</h5>
-                            <a href="#" class="btn btn-sm btn-primary" data-section="payments">View All</a>
+                            <a href="?section=payments" class="btn btn-sm btn-primary" data-section="payments">View All</a>
                         </div>
                         <?php if (count($recentPayments) > 0): ?>
                             <table>
@@ -1074,8 +1351,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <tbody>
                                     <?php foreach ($recentPayments as $payment): ?>
                                         <tr>
-                                            <td><?= date('M j, Y', strtotime($payment['date'])) ?></td>
-                                            <td><?= htmlspecialchars($payment['tenant']) ?></td>
+                                            <td><?= date('M j, Y', strtotime($payment['payment_date'])) ?></td>
+                                            <td><?= htmlspecialchars($payment['first_name'] . ' ' . $payment['last_name']) ?></td>
                                             <td>Ksh <?= number_format($payment['amount'], 2) ?></td>
                                             <td>
                                                 <span class="status completed">Completed</span>
@@ -1099,9 +1376,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="table-container">
                         <div class="table-header p-3 d-flex justify-content-between align-items-center">
                             <h5 class="mb-0">Pending Requests</h5>
-                            <a href="#" class="btn btn-sm btn-primary" data-section="maintenance">View All</a>
+                            <a href="?section=maintenance" class="btn btn-sm btn-primary" data-section="maintenance">View All</a>
                         </div>
-                        <?php if ($pendingRequests > 0): ?>
+                        <?php if (count($maintenanceRequests) > 0): ?>
                             <table>
                                 <thead>
                                     <tr>
@@ -1112,15 +1389,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 </thead>
                                 <tbody>
                                     <?php foreach ($maintenanceRequests as $request): ?>
-                                        <?php if ($request['status'] === 'pending'): ?>
-                                            <tr>
-                                                <td><?= date('M j, Y', strtotime($request['date'])) ?></td>
-                                                <td><?= htmlspecialchars($request['property']) ?></td>
-                                                <td>
-                                                    <span class="status pending">Pending</span>
-                                                </td>
-                                            </tr>
-                                        <?php endif; ?>
+                                        <tr>
+                                            <td><?= date('M j, Y', strtotime($request['created_at'])) ?></td>
+                                            <td><?= htmlspecialchars($request['property_name']) ?></td>
+                                            <td>
+                                                <span class="status pending">Pending</span>
+                                            </td>
+                                        </tr>
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
@@ -1164,7 +1439,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         
         <!-- Properties Section -->
-        <div class="dashboard-section" id="properties-section">
+        <div class="dashboard-section <?= $section === 'properties' ? 'active' : '' ?>" id="properties-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Property Management</h2>
                 <button class="btn btn-primary" id="addPropertyBtn">
@@ -1193,18 +1468,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-start mb-3">
                                         <h5 class="card-title"><?= $property['name'] ?></h5>
-                                        <span class="badge bg-success"><?= $property['units'] ?> units</span>
+                                        <span class="badge bg-success"><?= $property['number_of_units'] ?> units</span>
                                     </div>
                                     <p class="text-muted">
                                         <i class="fas fa-map-marker-alt me-2"></i>
-                                        <?= $property['location'] ?>
+                                        <?= $property['location'] ?>, <?= $property['town'] ?>
                                     </p>
-                                    <p class="mb-1"><strong>Occupancy:</strong> <?= round(($property['occupied'] / $property['units']) * 100) ?>%</p>
-                                    <p><strong>Monthly Revenue:</strong> Ksh <?= number_format($property['monthly_rent'], 2) ?></p>
+                                    <p class="mb-1"><strong>Category:</strong> <?= $property['category_name'] ?></p>
+                                    <p><strong>Status:</strong> <?= ucfirst($property['status']) ?></p>
                                     <div class="d-flex justify-content-between align-items-center mt-3">
                                         <a href="#" class="btn btn-sm btn-outline-primary">View Details</a>
                                         <small class="text-muted">
-                                            <?= $property['type'] ?>
+                                            <?= $property['county'] ?>
                                         </small>
                                     </div>
                                 </div>
@@ -1223,7 +1498,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         
         <!-- Tenants Section -->
-        <div class="dashboard-section" id="tenants-section">
+        <div class="dashboard-section <?= $section === 'tenants' ? 'active' : '' ?>" id="tenants-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Tenant Management</h2>
                 <button class="btn btn-primary" id="addTenantBtn">
@@ -1262,16 +1537,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <tbody>
                             <?php foreach ($tenants as $tenant): ?>
                                 <tr>
-                                    <td><?= $tenant['name'] ?></td>
-                                    <td><?= $tenant['property'] ?></td>
-                                    <td><?= $tenant['unit'] ?></td>
-                                    <td>Ksh <?= number_format($tenant['rent_due'], 2) ?></td>
+                                    <td><?= $tenant['first_name'] . ' ' . $tenant['last_name'] ?></td>
+                                    <td><?= $tenant['property_name'] ?></td>
+                                    <td><?= $tenant['unit_name'] ?></td>
+                                    <td>Ksh <?= number_format($tenant['monthly_rent'], 2) ?></td>
                                     <td>
-                                        <span class="status <?= $tenant['status'] ?>">
-                                            <?= ucfirst($tenant['status']) ?>
-                                        </span>
+                                        <span class="status active">Active</span>
                                     </td>
-                                    <td><?= date('M j, Y', strtotime($tenant['lease_end'])) ?></td>
+                                    <td><?= date('M j, Y', strtotime($tenant['end_date'])) ?></td>
                                     <td>
                                         <button class="btn btn-sm btn-outline-primary me-1">View</button>
                                         <button class="btn btn-sm btn-outline-secondary">Message</button>
@@ -1292,7 +1565,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         
         <!-- Leases Section -->
-        <div class="dashboard-section" id="leases-section">
+        <div class="dashboard-section <?= $section === 'leases' ? 'active' : '' ?>" id="leases-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Lease Agreements</h2>
                 <button class="btn btn-primary" id="createLeaseBtn">
@@ -1329,15 +1602,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($tenants as $tenant): ?>
+                            <?php foreach ($leases as $lease): ?>
                                 <tr>
-                                    <td><?= $tenant['name'] ?></td>
-                                    <td><?= $tenant['property'] ?></td>
-                                    <td><?= date('M j, Y', strtotime('-1 year', strtotime($tenant['lease_end']))) ?></td>
-                                    <td><?= date('M j, Y', strtotime($tenant['lease_end'])) ?></td>
-                                    <td>Ksh <?= number_format($tenant['rent_due'], 2) ?></td>
+                                    <td><?= $lease['first_name'] . ' ' . $lease['last_name'] ?></td>
+                                    <td><?= $lease['property_name'] ?></td>
+                                    <td><?= date('M j, Y', strtotime($lease['start_date'])) ?></td>
+                                    <td><?= date('M j, Y', strtotime($lease['end_date'])) ?></td>
+                                    <td>Ksh <?= number_format($lease['monthly_rent'], 2) ?></td>
                                     <td>
-                                        <span class="status active">Active</span>
+                                        <span class="status <?= $lease['status'] === 'active' ? 'active' : 'pending' ?>">
+                                            <?= ucfirst($lease['status']) ?>
+                                        </span>
                                     </td>
                                     <td>
                                         <button class="btn btn-sm btn-outline-primary me-1">View</button>
@@ -1359,20 +1634,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         
         <!-- Payments Section -->
-        <div class="dashboard-section" id="payments-section">
+        <div class="dashboard-section <?= $section === 'payments' ? 'active' : '' ?>" id="payments-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Payment Records</h2>
                 <div>
                     <button class="btn btn-outline-primary me-2">
                         <i class="fas fa-download me-1"></i> Export
                     </button>
-                    <button class="btn btn-primary" id="filterPaymentsBtn">
-                        <i class="fas fa-filter me-1"></i> Filter
+                    <button class="btn btn-primary" id="recordPaymentBtn">
+                        <i class="fas fa-plus me-1"></i> Record Payment
                     </button>
                 </div>
             </div>
             
-            <?php if (count($recentPayments) > 0): ?>
+            <?php if (count($payments) > 0): ?>
                 <div class="filter-controls">
                     <div class="form-group">
                         <select class="form-select" id="paymentFilter">
@@ -1401,13 +1676,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($recentPayments as $payment): ?>
+                            <?php foreach ($payments as $payment): ?>
                                 <tr>
-                                    <td><?= date('M j, Y', strtotime($payment['date'])) ?></td>
-                                    <td><?= $payment['tenant'] ?></td>
-                                    <td><?= $payment['property'] ?></td>
+                                    <td><?= date('M j, Y', strtotime($payment['payment_date'])) ?></td>
+                                    <td><?= $payment['first_name'] . ' ' . $payment['last_name'] ?></td>
+                                    <td><?= $payment['property_name'] ?></td>
                                     <td>Ksh <?= number_format($payment['amount'], 2) ?></td>
-                                    <td><?= $payment['method'] ?></td>
+                                    <td><?= ucfirst($payment['payment_method']) ?></td>
                                     <td>
                                         <span class="status completed">Completed</span>
                                     </td>
@@ -1426,30 +1701,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <i class="fas fa-money-bill-wave"></i>
                     <h3>No Payment Records</h3>
                     <p>You haven't received any payments yet. Set up your payment methods and invite tenants to make payments.</p>
-                    <button class="btn btn-primary">Configure Payment Settings</button>
+                    <button class="btn btn-primary" id="recordPaymentBtn">Record Payment</button>
                 </div>
             <?php endif; ?>
         </div>
         
         <!-- Maintenance Section -->
-        <div class="dashboard-section" id="maintenance-section">
+        <div class="dashboard-section <?= $section === 'maintenance' ? 'active' : '' ?>" id="maintenance-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Maintenance Requests</h2>
-                <div class="btn-group">
-                    <button class="btn btn-outline-primary active">All</button>
-                    <button class="btn btn-outline-primary">Pending</button>
-                    <button class="btn btn-outline-primary">Resolved</button>
-                </div>
+                <button class="btn btn-primary" id="createRequestBtn">
+                    <i class="fas fa-plus me-2"></i> Create Request
+                </button>
             </div>
             
-            <?php if (count($maintenanceRequests) > 0): ?>
+            <?php if (count($maintenanceList) > 0): ?>
                 <div class="filter-controls">
                     <div class="form-group">
                         <select class="form-select" id="maintenanceFilter">
-                            <option>All Properties</option>
-                            <option>Greenview Apartments</option>
-                            <option>Riverfront Villas</option>
-                            <option>Sunset Heights</option>
+                            <option>All Requests</option>
+                            <option>Pending</option>
+                            <option>In Progress</option>
+                            <option>Completed</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -1471,16 +1744,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($maintenanceRequests as $request): ?>
+                            <?php foreach ($maintenanceList as $request): ?>
                                 <tr>
-                                    <td><?= date('M j, Y', strtotime($request['date'])) ?></td>
-                                    <td><?= $request['property'] ?></td>
-                                    <td><?= $request['unit'] ?></td>
-                                    <td><?= $request['description'] ?></td>
-                                    <td><?= $request['urgency'] ?></td>
+                                    <td><?= date('M j, Y', strtotime($request['created_at'])) ?></td>
+                                    <td><?= $request['property_name'] ?></td>
+                                    <td><?= $request['unit_name'] ?></td>
+                                    <td><?= $request['title'] ?></td>
+                                    <td><?= ucfirst($request['urgency']) ?></td>
                                     <td>
                                         <span class="status <?= $request['status'] ?>">
-                                            <?= ucfirst($request['status']) ?>
+                                            <?= ucfirst(str_replace('_', ' ', $request['status'])) ?>
                                         </span>
                                     </td>
                                     <td>
@@ -1497,12 +1770,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <i class="fas fa-tools"></i>
                     <h3>No Maintenance Requests</h3>
                     <p>You don't have any maintenance requests at this time. All your properties are in good condition!</p>
+                    <button class="btn btn-primary" id="createRequestBtn">Create New Request</button>
                 </div>
             <?php endif; ?>
         </div>
         
         <!-- Reports Section -->
-        <div class="dashboard-section" id="reports-section">
+        <div class="dashboard-section <?= $section === 'reports' ? 'active' : '' ?>" id="reports-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Financial Reports</h2>
                 <div class="btn-group">
@@ -1570,10 +1844,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         
         <!-- Profile Section -->
-        <div class="dashboard-section" id="profile-section">
+        <div class="dashboard-section <?= $section === 'profile' ? 'active' : '' ?>" id="profile-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>My Profile</h2>
-                <button class="btn btn-outline-primary">
+                <button class="btn btn-outline-primary" id="editProfileBtn">
                     <i class="fas fa-edit me-1"></i> Edit Profile
                 </button>
             </div>
@@ -1581,15 +1855,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="profile-card">
                 <div class="profile-header">
                     <div class="profile-avatar">
-                        <?= substr($landlord['full_name'], 0, 1) ?>
+                        <?= substr($landlord['first_name'], 0, 1) . substr($landlord['last_name'], 0, 1) ?>
                     </div>
-                    <h3><?= $landlord['full_name'] ?></h3>
+                    <h3><?= $landlord['first_name'] . ' ' . $landlord['last_name'] ?></h3>
                     <p>Landlord at KejaSmart</p>
                 </div>
                 <div class="profile-body">
                     <div class="profile-row">
                         <div class="profile-label">Full Name</div>
-                        <div class="profile-value"><?= $landlord['full_name'] ?></div>
+                        <div class="profile-value"><?= $landlord['first_name'] . ' ' . $landlord['last_name'] ?></div>
                     </div>
                     <div class="profile-row">
                         <div class="profile-label">Email Address</div>
@@ -1600,12 +1874,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <div class="profile-value"><?= $landlord['phone'] ?></div>
                     </div>
                     <div class="profile-row">
-                        <div class="profile-label">Account Type</div>
-                        <div class="profile-value">Landlord</div>
+                        <div class="profile-label">National ID</div>
+                        <div class="profile-value"><?= $landlord['national_id'] ?></div>
+                    </div>
+                    <div class="profile-row">
+                        <div class="profile-label">KRA PIN</div>
+                        <div class="profile-value"><?= $landlord['kra_pin'] ?? 'Not provided' ?></div>
+                    </div>
+                    <div class="profile-row">
+                        <div class="profile-label">Address</div>
+                        <div class="profile-value"><?= $landlord['address'] ?? 'Not provided' ?></div>
+                    </div>
+                    <div class="profile-row">
+                        <div class="profile-label">County</div>
+                        <div class="profile-value"><?= $landlord['county'] ?? 'Not provided' ?></div>
+                    </div>
+                    <div class="profile-row">
+                        <div class="profile-label">Account Status</div>
+                        <div class="profile-value">
+                            <span class="badge bg-success">Approved</span>
+                        </div>
                     </div>
                     <div class="profile-row">
                         <div class="profile-label">Member Since</div>
-                        <div class="profile-value"><?= date('F j, Y', strtotime($landlord['join_date'])) ?></div>
+                        <div class="profile-value"><?= date('F j, Y', strtotime($landlord['created_at'])) ?></div>
                     </div>
                 </div>
             </div>
@@ -1617,20 +1909,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <h5>Change Password</h5>
                         </div>
                         <div class="card-body">
-                            <form>
+                            <form method="POST">
                                 <div class="mb-3">
                                     <label class="form-label">Current Password</label>
-                                    <input type="password" class="form-control">
+                                    <input type="password" name="current_password" class="form-control" required>
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">New Password</label>
-                                    <input type="password" class="form-control">
+                                    <input type="password" name="new_password" class="form-control" required>
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Confirm New Password</label>
-                                    <input type="password" class="form-control">
+                                    <input type="password" name="confirm_password" class="form-control" required>
                                 </div>
-                                <button type="submit" class="btn btn-primary">Update Password</button>
+                                <button type="submit" name="change_password" class="btn btn-primary">Update Password</button>
                             </form>
                         </div>
                     </div>
@@ -1690,17 +1982,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <input type="text" class="form-control" name="location" placeholder="Enter property location" required>
                         </div>
                         <div class="mb-3">
+                            <label class="form-label">County</label>
+                            <input type="text" class="form-control" name="county" placeholder="Enter county" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Town</label>
+                            <input type="text" class="form-control" name="town" placeholder="Enter town" required>
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">Number of Units</label>
                             <input type="number" class="form-control" name="units" placeholder="Enter number of units" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Property Type</label>
-                            <select class="form-select" name="property_type" required>
-                                <option>Apartment Building</option>
-                                <option>Single Family Home</option>
-                                <option>Commercial Property</option>
-                                <option>Multi-family Complex</option>
+                            <select class="form-select" name="category_id" required>
+                                <option value="">Select property type</option>
+                                <?php foreach ($categories as $category): ?>
+                                    <option value="<?= $category['id'] ?>"><?= $category['name'] ?></option>
+                                <?php endforeach; ?>
                             </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Description (Optional)</label>
+                            <textarea class="form-control" name="description" placeholder="Describe the property"></textarea>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -1723,8 +2027,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <form method="POST">
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label class="form-label">Full Name</label>
-                            <input type="text" class="form-control" name="full_name" placeholder="Enter tenant's full name" required>
+                            <label class="form-label">First Name</label>
+                            <input type="text" class="form-control" name="first_name" placeholder="Enter first name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Last Name</label>
+                            <input type="text" class="form-control" name="last_name" placeholder="Enter last name" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Email</label>
@@ -1735,30 +2043,172 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <input type="tel" class="form-control" name="phone" placeholder="Enter phone number" required>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Property</label>
-                            <select class="form-select" name="property" required>
-                                <option>Select property</option>
-                                <?php foreach ($properties as $property): ?>
-                                    <option value="<?= $property['name'] ?>"><?= $property['name'] ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                            <label class="form-label">National ID</label>
+                            <input type="text" class="form-control" name="national_id" placeholder="Enter national ID" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Unit</label>
-                            <input type="text" class="form-control" name="unit" placeholder="Enter unit number" required>
+                            <select class="form-select" name="unit_id" required>
+                                <option value="">Select unit</option>
+                                <?php foreach ($vacantUnits as $unit): ?>
+                                    <option value="<?= $unit['id'] ?>"><?= $unit['property_name'] ?> - <?= $unit['name'] ?></option>
+                                <?php endforeach; ?>
+                            </select>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Monthly Rent (Ksh)</label>
                             <input type="number" class="form-control" name="rent_due" placeholder="Enter monthly rent" required>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">Lease End Date</label>
-                            <input type="date" class="form-control" name="lease_end" required>
-                        </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="submit" name="add_tenant" class="btn btn-primary">Add Tenant</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Record Payment Modal -->
+    <div class="modal fade" id="recordPaymentModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Record Payment</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="POST">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Lease</label>
+                            <select class="form-select" name="lease_id" required>
+                                <option value="">Select lease</option>
+                                <?php foreach ($activeLeasesList as $lease): ?>
+                                    <option value="<?= $lease['id'] ?>"><?= $lease['first_name'] . ' ' . $lease['last_name'] ?> - <?= $lease['unit_name'] ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Amount (Ksh)</label>
+                            <input type="number" class="form-control" name="amount" step="0.01" placeholder="Enter amount" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Payment Method</label>
+                            <select class="form-select" name="method" required>
+                                <option value="mpesa">M-Pesa</option>
+                                <option value="bank">Bank Transfer</option>
+                                <option value="cash">Cash</option>
+                                <option value="cheque">Cheque</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Reference Number</label>
+                            <input type="text" class="form-control" name="reference" placeholder="Enter reference number">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="record_payment" class="btn btn-primary">Record Payment</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Request Modal -->
+    <div class="modal fade" id="createRequestModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create Maintenance Request</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="POST">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Unit</label>
+                            <select class="form-select" name="unit_id" required>
+                                <option value="">Select unit</option>
+                                <?php foreach ($allUnits as $unit): ?>
+                                    <option value="<?= $unit['id'] ?>"><?= $unit['property_name'] ?> - <?= $unit['name'] ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Title</label>
+                            <input type="text" class="form-control" name="title" placeholder="Enter request title" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Description</label>
+                            <textarea class="form-control" name="description" placeholder="Describe the issue" required></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Urgency</label>
+                            <select class="form-select" name="urgency" required>
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                                <option value="emergency">Emergency</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="create_request" class="btn btn-primary">Create Request</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Profile Modal -->
+    <div class="modal fade" id="editProfileModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Profile</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="POST">
+                    <div class="modal-body">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">First Name</label>
+                                <input type="text" class="form-control" name="first_name" value="<?= $landlord['first_name'] ?>" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Last Name</label>
+                                <input type="text" class="form-control" name="last_name" value="<?= $landlord['last_name'] ?>" required>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" name="email" value="<?= $landlord['email'] ?>" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Phone Number</label>
+                            <input type="tel" class="form-control" name="phone" value="<?= $landlord['phone'] ?>" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">National ID</label>
+                            <input type="text" class="form-control" name="national_id" value="<?= $landlord['national_id'] ?>" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">KRA PIN</label>
+                            <input type="text" class="form-control" name="kra_pin" value="<?= $landlord['kra_pin'] ?>">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Address</label>
+                            <textarea class="form-control" name="address"><?= $landlord['address'] ?></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">County</label>
+                            <input type="text" class="form-control" name="county" value="<?= $landlord['county'] ?>">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="update_profile" class="btn btn-primary">Save Changes</button>
                     </div>
                 </form>
             </div>
@@ -1797,33 +2247,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (this.getAttribute('href') === 'logout.php' || 
                         this.getAttribute('href') === 'index.html') return;
                     
-                    e.preventDefault();
-                    
-                    // Remove active class from all items
-                    menuItems.forEach(i => i.classList.remove('active'));
-                    
-                    // Add active class to clicked item
-                    this.classList.add('active');
-                    
-                    // Get target section
-                    const target = this.getAttribute('data-section');
-                    
-                    // Hide all sections
-                    dashboardSections.forEach(section => {
-                        section.classList.remove('active');
-                    });
-                    
-                    // Show target section
-                    document.getElementById(`${target}-section`).classList.add('active');
-                    
                     // Close sidebar on mobile after selection
                     if (window.innerWidth < 992) {
                         sidebar.classList.remove('active');
                         sidebarOverlay.style.display = 'none';
                     }
-                    
-                    // Scroll to top
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
                 });
             });
             
@@ -1833,68 +2261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     const target = this.getAttribute('data-section');
                     if (!target) return;
                     
-                    // Remove active class from all menu items
-                    menuItems.forEach(i => i.classList.remove('active'));
-                    
-                    // Find the matching menu item and activate it
-                    menuItems.forEach(item => {
-                        if (item.getAttribute('data-section') === target) {
-                            item.classList.add('active');
-                        }
-                    });
-                    
-                    // Hide all sections
-                    dashboardSections.forEach(section => {
-                        section.classList.remove('active');
-                    });
-                    
-                    // Show target section
-                    document.getElementById(`${target}-section`).classList.add('active');
-                    
-                    // Close sidebar on mobile
-                    if (window.innerWidth < 992) {
-                        sidebar.classList.remove('active');
-                        sidebarOverlay.style.display = 'none';
-                    }
-                    
-                    // Scroll to top
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                });
-            });
-            
-            // Handle "View All" buttons
-            document.querySelectorAll('.btn-primary[data-section]').forEach(button => {
-                button.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    
-                    const target = this.getAttribute('data-section');
-                    
-                    // Remove active class from all menu items
-                    menuItems.forEach(i => i.classList.remove('active'));
-                    
-                    // Find the matching menu item and activate it
-                    menuItems.forEach(item => {
-                        if (item.getAttribute('data-section') === target) {
-                            item.classList.add('active');
-                        }
-                    });
-                    
-                    // Hide all sections
-                    dashboardSections.forEach(section => {
-                        section.classList.remove('active');
-                    });
-                    
-                    // Show target section
-                    document.getElementById(`${target}-section`).classList.add('active');
-                    
-                    // Close sidebar on mobile
-                    if (window.innerWidth < 992) {
-                        sidebar.classList.remove('active');
-                        sidebarOverlay.style.display = 'none';
-                    }
-                    
-                    // Scroll to top
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    window.location.href = `?section=${target}`;
                 });
             });
             
@@ -1922,14 +2289,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 });
             });
             
-            document.getElementById('addTenantBtn').addEventListener('click', function() {
-                const modal = new bootstrap.Modal(document.getElementById('addTenantModal'));
-                modal.show();
+            document.querySelectorAll('#addTenantBtn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const modal = new bootstrap.Modal(document.getElementById('addTenantModal'));
+                    modal.show();
+                });
             });
             
-            document.getElementById('createLeaseBtn').addEventListener('click', function() {
-                const modal = new bootstrap.Modal(document.getElementById('createLeaseModal'));
-                modal.show();
+            document.querySelectorAll('#createLeaseBtn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    alert('Lease creation functionality would open here');
+                });
+            });
+            
+            document.querySelectorAll('#recordPaymentBtn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const modal = new bootstrap.Modal(document.getElementById('recordPaymentModal'));
+                    modal.show();
+                });
+            });
+            
+            document.querySelectorAll('#createRequestBtn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const modal = new bootstrap.Modal(document.getElementById('createRequestModal'));
+                    modal.show();
+                });
+            });
+            
+            document.querySelectorAll('#editProfileBtn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const modal = new bootstrap.Modal(document.getElementById('editProfileModal'));
+                    modal.show();
+                });
             });
             
             // Initialize charts
@@ -2009,139 +2400,143 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             });
             
-            // Income Report Chart
-            const incomeReportCtx = document.getElementById('incomeReportChart').getContext('2d');
-            const incomeReportChart = new Chart(incomeReportCtx, {
-                type: 'bar',
-                data: {
-                    labels: ['May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'],
-                    datasets: [{
-                        label: 'Income (Ksh)',
-                        data: [120000, 150000, 180000, 90000, 210000, 240000],
-                        backgroundColor: '#198754',
-                        borderRadius: 6
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            grid: {
-                                drawBorder: false
+            <?php if ($section === 'reports'): ?>
+                // Income Report Chart
+                const incomeReportCtx = document.getElementById('incomeReportChart').getContext('2d');
+                const incomeReportChart = new Chart(incomeReportCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: <?= json_encode(array_map(function($item) { 
+                            return date('M Y', strtotime($item['month'] . '-01')); 
+                        }, $incomeReport)) ?>,
+                        datasets: [{
+                            label: 'Income (Ksh)',
+                            data: <?= json_encode(array_column($incomeReport, 'amount')) ?>,
+                            backgroundColor: '#198754',
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: {
+                                    drawBorder: false
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    display: false
+                                }
                             }
                         },
-                        x: {
-                            grid: {
+                        plugins: {
+                            legend: {
                                 display: false
                             }
                         }
+                    }
+                });
+                
+                // Occupancy Chart
+                const occupancyCtx = document.getElementById('occupancyChart').getContext('2d');
+                const occupancyChart = new Chart(occupancyCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Occupied', 'Vacant'],
+                        datasets: [{
+                            data: [<?= $occupancy['occupied'] ?>, <?= $occupancy['total'] - $occupancy['occupied'] ?>],
+                            backgroundColor: [
+                                '#198754',
+                                '#e9ecef'
+                            ],
+                            borderWidth: 0
+                        }]
                     },
-                    plugins: {
-                        legend: {
-                            display: false
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '80%',
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
                         }
                     }
-                }
-            });
-            
-            // Occupancy Chart
-            const occupancyCtx = document.getElementById('occupancyChart').getContext('2d');
-            const occupancyChart = new Chart(occupancyCtx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Occupied', 'Vacant'],
-                    datasets: [{
-                        data: [85, 15],
-                        backgroundColor: [
-                            '#198754',
-                            '#e9ecef'
-                        ],
-                        borderWidth: 0
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    cutout: '80%',
-                    plugins: {
-                        legend: {
-                            position: 'bottom'
+                });
+                
+                // Expense Chart
+                const expenseCtx = document.getElementById('expenseChart').getContext('2d');
+                const expenseChart = new Chart(expenseCtx, {
+                    type: 'pie',
+                    data: {
+                        labels: ['Maintenance', 'Utilities', 'Taxes', 'Insurance', 'Other'],
+                        datasets: [{
+                            data: [35, 25, 20, 15, 5],
+                            backgroundColor: [
+                                '#198754',
+                                '#0d6efd',
+                                '#ffc107',
+                                '#dc3545',
+                                '#6c757d'
+                            ],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
                         }
                     }
-                }
-            });
-            
-            // Expense Chart
-            const expenseCtx = document.getElementById('expenseChart').getContext('2d');
-            const expenseChart = new Chart(expenseCtx, {
-                type: 'pie',
-                data: {
-                    labels: ['Maintenance', 'Utilities', 'Taxes', 'Insurance', 'Other'],
-                    datasets: [{
-                        data: [35, 25, 20, 15, 5],
-                        backgroundColor: [
-                            '#198754',
-                            '#0d6efd',
-                            '#ffc107',
-                            '#dc3545',
-                            '#6c757d'
-                        ],
-                        borderWidth: 0
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'bottom'
-                        }
-                    }
-                }
-            });
-            
-            // Payment Status Chart
-            const paymentStatusCtx = document.getElementById('paymentStatusChart').getContext('2d');
-            const paymentStatusChart = new Chart(paymentStatusCtx, {
-                type: 'bar',
-                data: {
-                    labels: ['On Time', 'Late', 'Overdue'],
-                    datasets: [{
-                        label: 'Payments',
-                        data: [78, 15, 7],
-                        backgroundColor: [
-                            '#198754',
-                            '#ffc107',
-                            '#dc3545'
-                        ],
-                        borderRadius: 6
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            grid: {
-                                drawBorder: false
+                });
+                
+                // Payment Status Chart
+                const paymentStatusCtx = document.getElementById('paymentStatusChart').getContext('2d');
+                const paymentStatusChart = new Chart(paymentStatusCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['On Time', 'Late', 'Overdue'],
+                        datasets: [{
+                            label: 'Payments',
+                            data: [<?= $paymentStatus['on_time'] ?>, <?= $paymentStatus['late'] ?>, 0],
+                            backgroundColor: [
+                                '#198754',
+                                '#ffc107',
+                                '#dc3545'
+                            ],
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: {
+                                    drawBorder: false
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    display: false
+                                }
                             }
                         },
-                        x: {
-                            grid: {
+                        plugins: {
+                            legend: {
                                 display: false
                             }
                         }
-                    },
-                    plugins: {
-                        legend: {
-                            display: false
-                        }
                     }
-                }
-            });
+                });
+            <?php endif; ?>
         }
     </script>
 </body>

@@ -49,6 +49,11 @@ CREATE TABLE landlords (
     approval_notes TEXT,
     approved_by INT NULL,
     approved_at DATETIME NULL,
+    mpesa_consumer_key VARCHAR(255) NULL,
+mpesa_consumer_secret VARCHAR(255) NULL,
+mpesa_short_code VARCHAR(10) NULL,
+mpesa_pass_key VARCHAR(255) NULL,
+mpesa_environment ENUM('sandbox', 'production') DEFAULT 'sandbox',
     FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (approved_by) REFERENCES admins(id) ON DELETE SET NULL,
     INDEX idx_status (status),
@@ -361,3 +366,4 @@ INSERT INTO system_settings (setting_key, setting_value, description, is_public)
 ('min_rent_amount', '5000', 'Minimum allowed rent amount in KES', FALSE),
 ('late_fee_percentage', '5', 'Percentage charged for late payments', TRUE),
 ('grace_period_days', '5', 'Number of days before late fees apply', TRUE);
+('mpesa_callback_base', 'https://yourdomain.com/mpesa_callback.php', 'Base URL for M-Pesa callbacks', FALSE);

@@ -6,14 +6,16 @@ class MpesaIntegration {
     private $passKey;
     private $callbackUrl;
     private $environment;
+    private $landlordId; // Track landlord ID for logging
     
-    public function __construct() {
-        $this->consumerKey = 'your_consumer_key';
-        $this->consumerSecret = 'your_consumer_secret';
-        $this->shortCode = '174379'; // Sandbox: 174379
-        $this->passKey = 'your_passkey';
-        $this->callbackUrl = 'https://yourdomain.com/mpesa_callback.php';
-        $this->environment = 'sandbox'; // or 'production'
+    public function __construct($credentials) {
+        $this->consumerKey = $credentials['consumerKey'];
+        $this->consumerSecret = $credentials['consumerSecret'];
+        $this->shortCode = $credentials['shortCode'];
+        $this->passKey = $credentials['passKey'];
+        $this->callbackUrl = $credentials['callbackUrl'];
+        $this->environment = $credentials['environment'];
+        $this->landlordId = $credentials['landlordId'] ?? null;
     }
     
     /**
@@ -35,7 +37,13 @@ class MpesaIntegration {
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         
         $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+        
+        if ($httpCode != 200) {
+            $this->logError("Access token request failed with HTTP $httpCode");
+            return null;
+        }
         
         $data = json_decode($response);
         return $data->access_token ?? null;
@@ -90,9 +98,17 @@ class MpesaIntegration {
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
         
+        $responseData = json_decode($response, true);
+        $success = $httpCode == 200;
+        
+        if (!$success) {
+            $this->logError("STK Push failed: " . ($responseData['errorMessage'] ?? 'Unknown error'));
+        }
+        
         return [
-            'success' => $httpCode == 200,
-            'response' => json_decode($response, true)
+            'success' => $success,
+            'response' => $responseData,
+            'checkoutRequestID' => $responseData['CheckoutRequestID'] ?? null
         ];
     }
     
@@ -100,7 +116,7 @@ class MpesaIntegration {
      * Handle M-Pesa callback
      */
     public function handleCallback($callbackData) {
-        // Log raw callback data
+        // Log raw callback data with landlord identifier
         $this->logCallback($callbackData);
         
         if (!isset($callbackData['Body']['stkCallback'])) {
@@ -110,60 +126,159 @@ class MpesaIntegration {
         $callback = $callbackData['Body']['stkCallback'];
         $resultCode = $callback['ResultCode'];
         $resultDesc = $callback['ResultDesc'];
+        $checkoutRequestID = $callback['CheckoutRequestID'] ?? '';
+        
+        $result = [
+            'success' => $resultCode == 0,
+            'result_code' => $resultCode,
+            'result_desc' => $resultDesc,
+            'checkout_request_id' => $checkoutRequestID
+        ];
         
         if ($resultCode == 0) {
             // Successful payment
             $metadata = $callback['CallbackMetadata']['Item'];
-            $amount = $metadata[0]['Value'];
-            $receipt = $metadata[1]['Value'];
-            $phone = $metadata[4]['Value'];
             
-            return [
-                'success' => true,
-                'amount' => $amount,
-                'receipt' => $receipt,
-                'phone' => $phone,
-                'message' => 'Payment processed successfully'
-            ];
-        } else {
-            return [
-                'success' => false,
-                'message' => $resultDesc
-            ];
+            // Map metadata to named values
+            $metadataMap = [];
+            foreach ($metadata as $item) {
+                $metadataMap[$item['Name']] = $item['Value'];
+            }
+            
+            $result['amount'] = $metadataMap['Amount'] ?? null;
+            $result['receipt'] = $metadataMap['MpesaReceiptNumber'] ?? null;
+            $result['phone'] = $metadataMap['PhoneNumber'] ?? null;
+            $result['transaction_date'] = $metadataMap['TransactionDate'] ?? null;
+            $result['account_reference'] = $metadataMap['AccountReference'] ?? null;
         }
+        
+        return $result;
     }
     
     /**
-     * Log callback data
+     * Log callback data with landlord identifier
      */
     private function logCallback($data) {
         $logFile = 'mpesa_callback.log';
-        $logEntry = date('Y-m-d H:i:s') . " - " . json_encode($data) . PHP_EOL;
+        $landlordId = $this->landlordId ?? 'unknown';
+        $logEntry = sprintf(
+            "[%s] [Landlord: %s] %s\n",
+            date('Y-m-d H:i:s'),
+            $landlordId,
+            json_encode($data)
+        );
+        file_put_contents($logFile, $logEntry, FILE_APPEND);
+    }
+    
+    /**
+     * Log error messages
+     */
+    private function logError($message) {
+        $logFile = 'mpesa_errors.log';
+        $landlordId = $this->landlordId ?? 'unknown';
+        $logEntry = sprintf(
+            "[%s] [Landlord: %s] %s\n",
+            date('Y-m-d H:i:s'),
+            $landlordId,
+            $message
+        );
         file_put_contents($logFile, $logEntry, FILE_APPEND);
     }
 }
 
-// Example usage in your payment processing script:
-// $mpesa = new MpesaIntegration();
-// $response = $mpesa->stkPush('0712345678', 5000, 'RENT_JULY_2023', 'July Rent Payment');
-// if ($response['success']) {
-//     // Payment initiated successfully
+/**
+ * Get landlord's M-Pesa credentials from database
+ * 
+ * @param int $landlordId
+ * @return array
+ */
+function getLandlordMpesaCredentials($landlordId) {
+    // Database connection - use your actual connection method
+    $db = new PDO('mysql:host=localhost;dbname=kejasmart', 'username', 'password');
+    
+    $stmt = $db->prepare("
+        SELECT 
+            mpesa_consumer_key, 
+            mpesa_consumer_secret,
+            mpesa_short_code,
+            mpesa_pass_key,
+            mpesa_environment
+        FROM landlords 
+        WHERE id = :id
+    ");
+    $stmt->execute([':id' => $landlordId]);
+    $landlord = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$landlord) {
+        return null;
+    }
+    
+    // Get base callback URL from system settings
+    $baseCallback = 'https://yourdomain.com/mpesa_callback.php'; // Default
+    $settingsStmt = $db->prepare("
+        SELECT setting_value 
+        FROM system_settings 
+        WHERE setting_key = 'mpesa_callback_base'
+    ");
+    $settingsStmt->execute();
+    $setting = $settingsStmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($setting) {
+        $baseCallback = $setting['setting_value'];
+    }
+    
+    return [
+        'consumerKey' => $landlord['mpesa_consumer_key'],
+        'consumerSecret' => $landlord['mpesa_consumer_secret'],
+        'shortCode' => $landlord['mpesa_short_code'],
+        'passKey' => $landlord['mpesa_pass_key'],
+        'callbackUrl' => $baseCallback . '?landlord_id=' . $landlordId,
+        'environment' => $landlord['mpesa_environment'],
+        'landlordId' => $landlordId
+    ];
+}
+
+// Example Usage for Payment Initiation:
+// $landlordId = 123; // Get from session or request
+// $credentials = getLandlordMpesaCredentials($landlordId);
+//
+// if ($credentials) {
+//     $mpesa = new MpesaIntegration($credentials);
+//     $response = $mpesa->stkPush('0712345678', 100, 'RENT_JULY', 'July Rent');
+//     
+//     if ($response['success']) {
+//         // Save checkoutRequestID to database
+//         $checkoutRequestID = $response['checkoutRequestID'];
+//         // Create record in mpesa_transactions table
+//     } else {
+//         // Handle error
+//     }
 // } else {
-//     // Handle error
+//     // Handle missing credentials
 // }
 
-// Example callback handler:
+// Example Callback Handler:
 // if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-//     $mpesa = new MpesaIntegration();
-//     $callbackData = json_decode(file_get_contents('php://input'), true);
-//     $result = $mpesa->handleCallback($callbackData);
+//     $landlordId = $_GET['landlord_id'] ?? null;
 //     
-//     if ($result['success']) {
-//         // Update your database, send notifications, etc.
+//     if ($landlordId) {
+//         $credentials = getLandlordMpesaCredentials($landlordId);
+//         
+//         if ($credentials) {
+//             $mpesa = new MpesaIntegration($credentials);
+//             $callbackData = json_decode(file_get_contents('php://input'), true);
+//             $result = $mpesa->handleCallback($callbackData);
+//             
+//             if ($result['success']) {
+//                 // Process successful payment:
+//                 // 1. Find lease by account_reference ($result['account_reference'])
+//                 // 2. Create payment record
+//                 // 3. Update mpesa_transactions table
+//             }
+//         }
 //     }
 //     
 //     // Always respond to M-Pesa
 //     header('Content-Type: application/json');
 //     echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Success']);
 // }
-?>

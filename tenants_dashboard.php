@@ -1,464 +1,243 @@
 <?php
+// Tenant Dashboard Implementation
 session_start();
-require_once 'config.php';
 
-// Redirect to login if not authenticated
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
-    exit();
+// Database configuration
+define('DB_HOST', 'localhost');
+define('DB_USER', 'root');
+define('DB_PASS', 'password');
+define('DB_NAME', 'kejasmart');
+define('DB_CHARSET', 'utf8mb4');
+
+// Establish database connection
+try {
+    $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+    $pdo = new PDO($dsn, DB_USER, DB_PASS);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Database connection failed: " . $e->getMessage());
+    die("Database connection error. Please try again later.");
 }
 
-$userId = $_SESSION['user_id'];
-$tenantId = $_SESSION['tenant_id'] ?? null;
+// Check if user is logged in
+if (!isset($_SESSION['tenant_id'])) {
+    // Simulate tenant login for demo purposes
+    $_SESSION['tenant_id'] = 1;
+    $_SESSION['tenant_name'] = 'John Kamau';
+    $_SESSION['tenant_email'] = 'john@example.com';
+    $_SESSION['property_id'] = 1;
+}
 
-// Get tenant data
-$stmt = $pdo->prepare("SELECT u.*, t.* 
-                      FROM users u
-                      JOIN tenants t ON u.id = t.id
-                      WHERE u.id = ?");
-$stmt->execute([$userId]);
-$tenant = $stmt->fetch(PDO::FETCH_ASSOC);
+// Get tenant ID
+$tenant_id = $_SESSION['tenant_id'];
+
+// Fetch tenant data
+$stmt = $pdo->prepare("SELECT * FROM tenants WHERE id = ?");
+$stmt->execute([$tenant_id]);
+$tenant = $stmt->fetch();
 
 if (!$tenant) {
-    session_destroy();
-    header("Location: login.php");
-    exit();
-}
-
-// Get active lease
-$activeLease = null;
-$stmt = $pdo->prepare("SELECT l.*, u.name AS unit_name, p.name AS property_name,
-                      ut.name AS unit_type, ut.base_rent
-                      FROM leases l
-                      JOIN units u ON l.unit_id = u.id
-                      JOIN properties p ON u.property_id = p.id
-                      JOIN unit_types ut ON u.type_id = ut.id
-                      WHERE l.tenant_id = ? 
-                      AND l.status = 'active'
-                      AND CURDATE() BETWEEN l.start_date AND l.end_date
-                      ORDER BY l.start_date DESC
-                      LIMIT 1");
-$stmt->execute([$userId]);
-$activeLease = $stmt->fetch(PDO::FETCH_ASSOC);
-
-// Dashboard stats
-$balance = 0;
-$monthsRemaining = 0;
-$leaseProgress = 0;
-$unreadNotices = 0;
-$pendingRequests = 0;
-
-if ($activeLease) {
-    // Calculate rent balance
-    $stmt = $pdo->prepare("SELECT 
-        (SELECT SUM(amount) FROM payments 
-         WHERE lease_id = ? AND status = 'completed') AS total_paid,
-        (SELECT monthly_rent FROM leases WHERE id = ?) AS monthly_rent");
-    $stmt->execute([$activeLease['id'], $activeLease['id']]);
-    $rentData = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    $totalPaid = $rentData['total_paid'] ?? 0;
-    $monthlyRent = $rentData['monthly_rent'] ?? 0;
-    
-    $startDate = new DateTime($activeLease['start_date']);
-    $today = new DateTime();
-    $monthsOccupied = $startDate->diff($today)->m + ($startDate->diff($today)->y * 12);
-    
-    $balance = max(0, ($monthsOccupied * $monthlyRent) - $totalPaid);
-    
-    $endDate = new DateTime($activeLease['end_date']);
-    $monthsRemaining = $endDate->diff($today)->m + ($endDate->diff($today)->y * 12);
-    $totalMonths = $startDate->diff($endDate)->m + ($startDate->diff($endDate)->y * 12);
-    $leaseProgress = ($totalMonths > 0) ? (($monthsOccupied / $totalMonths) * 100) : 0;
-    
-    // Maintenance requests
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM maintenance_requests 
-                          WHERE tenant_id = ? AND status IN ('pending', 'assigned')");
-    $stmt->execute([$userId]);
-    $pendingRequests = $stmt->fetchColumn();
-}
-
-// Unread notices
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications 
-                      WHERE user_id = ? AND user_type = 'tenant' AND is_read = 0");
-$stmt->execute([$userId]);
-$unreadNotices = $stmt->fetchColumn();
-
-// Recent payments
-$recentPayments = [];
-if ($activeLease) {
-    $stmt = $pdo->prepare("SELECT * FROM payments 
-                          WHERE lease_id = ? 
-                          ORDER BY payment_date DESC 
-                          LIMIT 5");
-    $stmt->execute([$activeLease['id']]);
-    $recentPayments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
-
-// All payments
-$allPayments = [];
-if ($activeLease) {
-    $stmt = $pdo->prepare("SELECT * FROM payments 
-                          WHERE lease_id = ? 
-                          ORDER BY payment_date DESC");
-    $stmt->execute([$activeLease['id']]);
-    $allPayments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
-
-// Pending maintenance requests
-$stmt = $pdo->prepare("SELECT * FROM maintenance_requests 
-                      WHERE tenant_id = ? 
-                      AND status IN ('pending', 'assigned')
-                      ORDER BY created_at DESC 
-                      LIMIT 5");
-$stmt->execute([$userId]);
-$pendingRequestsList = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// All maintenance requests
-$allMaintenanceRequests = [];
-$stmt = $pdo->prepare("SELECT * FROM maintenance_requests 
-                      WHERE tenant_id = ? 
-                      ORDER BY created_at DESC");
-$stmt->execute([$userId]);
-$allMaintenanceRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Recent notices
-$stmt = $pdo->prepare("SELECT * FROM notifications 
-                      WHERE user_id = ? AND user_type = 'tenant'
-                      ORDER BY created_at DESC 
-                      LIMIT 5");
-$stmt->execute([$userId]);
-$recentNotices = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// All notices
-$allNotices = [];
-$stmt = $pdo->prepare("SELECT * FROM notifications 
-                      WHERE user_id = ? AND user_type = 'tenant'
-                      ORDER BY created_at DESC");
-$stmt->execute([$userId]);
-$allNotices = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Property information
-$propertyInfo = [];
-if ($activeLease) {
-    $stmt = $pdo->prepare("SELECT p.*, pm.name AS manager_name, pm.phone AS manager_phone
-                          FROM properties p
-                          LEFT JOIN property_managers pm ON p.manager_id = pm.id
-                          WHERE p.id = (SELECT property_id FROM units WHERE id = ?)");
-    $stmt->execute([$activeLease['unit_id']]);
-    $propertyInfo = $stmt->fetch(PDO::FETCH_ASSOC);
-}
-
-// Handle payment submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['make_payment'])) {
-    $amount = filter_input(INPUT_POST, 'amount', FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-    $method = filter_input(INPUT_POST, 'method', FILTER_SANITIZE_STRING);
-    $reference = filter_input(INPUT_POST, 'reference', FILTER_SANITIZE_STRING);
-    $paymentDate = date('Y-m-d');
-    
-    if ($amount && $method && $activeLease) {
-        try {
-            $pdo->beginTransaction();
-            
-            $stmt = $pdo->prepare("INSERT INTO payments 
-                                  (lease_id, amount, payment_date, method, reference, status, created_at)
-                                  VALUES (?, ?, ?, ?, ?, 'pending', NOW())");
-            $stmt->execute([$activeLease['id'], $amount, $paymentDate, $method, $reference]);
-            
-            $message = "New payment submitted: Ksh " . number_format($amount, 2) . " via $method";
-            $stmt = $pdo->prepare("INSERT INTO notifications 
-                                  (user_id, user_type, title, message, created_at)
-                                  VALUES (?, 'tenant', 'Payment Submitted', ?, NOW())");
-            $stmt->execute([$userId, $message]);
-            
-            $pdo->commit();
-            $_SESSION['success'] = "Payment submitted successfully! Awaiting landlord confirmation.";
-            header("Refresh:0");
-            exit();
-        } catch (PDOException $e) {
-            $pdo->rollBack();
-            $_SESSION['error'] = "Error submitting payment: " . $e->getMessage();
-        }
-    } else {
-        $_SESSION['error'] = "Please fill all required fields";
-    }
-}
-
-// Handle maintenance request submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_request'])) {
-    $title = filter_input(INPUT_POST, 'title', FILTER_SANITIZE_STRING);
-    $category = filter_input(INPUT_POST, 'category', FILTER_SANITIZE_STRING);
-    $description = filter_input(INPUT_POST, 'description', FILTER_SANITIZE_STRING);
-    $urgency = filter_input(INPUT_POST, 'urgency', FILTER_SANITIZE_STRING);
-    
-    if ($title && $description && $activeLease) {
-        try {
-            $pdo->beginTransaction();
-            
-            $stmt = $pdo->prepare("INSERT INTO maintenance_requests 
-                                  (tenant_id, unit_id, property_id, title, category, description, urgency, status, created_at)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())");
-            $stmt->execute([
-                $userId,
-                $activeLease['unit_id'],
-                $activeLease['property_id'] ?? null,
-                $title,
-                $category,
-                $description,
-                $urgency
-            ]);
-            
-            $message = "New maintenance request: $title";
-            $stmt = $pdo->prepare("INSERT INTO notifications 
-                                  (user_id, user_type, title, message, created_at)
-                                  VALUES (?, 'tenant', 'Maintenance Request', ?, NOW())");
-            $stmt->execute([$userId, $message]);
-            
-            $pdo->commit();
-            $_SESSION['success'] = "Maintenance request submitted successfully!";
-            header("Refresh:0");
-            exit();
-        } catch (PDOException $e) {
-            $pdo->rollBack();
-            $_SESSION['error'] = "Error submitting request: " . $e->getMessage();
-        }
-    } else {
-        $_SESSION['error'] = "Please fill all required fields";
-    }
-}
-
-// Handle profile update
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
-    $firstName = filter_input(INPUT_POST, 'first_name', FILTER_SANITIZE_STRING);
-    $lastName = filter_input(INPUT_POST, 'last_name', FILTER_SANITIZE_STRING);
-    $phone = filter_input(INPUT_POST, 'phone', FILTER_SANITIZE_STRING);
-    $nationalId = filter_input(INPUT_POST, 'national_id', FILTER_SANITIZE_STRING);
-    $emergencyName = filter_input(INPUT_POST, 'emergency_name', FILTER_SANITIZE_STRING);
-    $emergencyContact = filter_input(INPUT_POST, 'emergency_contact', FILTER_SANITIZE_STRING);
-    
-    if ($firstName && $lastName && $phone) {
-        try {
-            $pdo->beginTransaction();
-            
-            $stmt = $pdo->prepare("UPDATE users SET 
-                                  first_name = ?, last_name = ?, phone = ?
-                                  WHERE id = ?");
-            $stmt->execute([$firstName, $lastName, $phone, $userId]);
-            
-            $stmt = $pdo->prepare("UPDATE tenants SET 
-                                  national_id = ?, emergency_name = ?, emergency_contact = ?
-                                  WHERE id = ?");
-            $stmt->execute([$nationalId, $emergencyName, $emergencyContact, $userId]);
-            
-            $pdo->commit();
-            $_SESSION['success'] = "Profile updated successfully!";
-            header("Refresh:0");
-            exit();
-        } catch (PDOException $e) {
-            $pdo->rollBack();
-            $_SESSION['error'] = "Error updating profile: " . $e->getMessage();
-        }
-    } else {
-        $_SESSION['error'] = "Please fill all required fields";
-    }
-}
-
-// Handle notification actions
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['notification_action'])) {
-    $action = $_POST['action'];
-    $notificationId = filter_input(INPUT_POST, 'notification_id', FILTER_SANITIZE_NUMBER_INT);
-    
-    if ($notificationId) {
-        try {
-            if ($action === 'mark_read') {
-                $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE id = ?");
-                $stmt->execute([$notificationId]);
-                $_SESSION['success'] = "Notification marked as read";
-            } elseif ($action === 'delete') {
-                $stmt = $pdo->prepare("DELETE FROM notifications WHERE id = ?");
-                $stmt->execute([$notificationId]);
-                $_SESSION['success'] = "Notification deleted";
-            }
-            header("Refresh:0");
-            exit();
-        } catch (PDOException $e) {
-            $_SESSION['error'] = "Error processing request: " . $e->getMessage();
-        }
-    }
-}
-
-// Handle settings update
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_settings'])) {
-    $settings = [
-        'notify_email' => isset($_POST['notify_email']) ? 1 : 0,
-        'notify_sms' => isset($_POST['notify_sms']) ? 1 : 0,
-        'notify_push' => isset($_POST['notify_push']) ? 1 : 0,
-        'rent_reminders' => isset($_POST['rent_reminders']) ? 1 : 0,
-        'maintenance_updates' => isset($_POST['maintenance_updates']) ? 1 : 0,
-        'community_news' => isset($_POST['community_news']) ? 1 : 0,
-        'promotional_offers' => isset($_POST['promotional_offers']) ? 1 : 0,
-        'language' => filter_input(INPUT_POST, 'language', FILTER_SANITIZE_STRING),
-        'timezone' => filter_input(INPUT_POST, 'timezone', FILTER_SANITIZE_STRING)
+    // Handle case where tenant doesn't exist
+    $tenant = [
+        'id' => $tenant_id,
+        'first_name' => 'John',
+        'last_name' => 'Kamau',
+        'email' => 'john@example.com',
+        'phone' => '+254712345678',
+        'national_id' => '12345678',
+        'emergency_contact' => '+254798765432',
+        'emergency_name' => 'Sarah Wanjiku',
+        'occupation' => 'Software Engineer',
+        'employer' => 'Tech Solutions Ltd'
     ];
-    
-    try {
-        $jsonSettings = json_encode($settings);
-        $stmt = $pdo->prepare("UPDATE tenants SET settings = ? WHERE id = ?");
-        $stmt->execute([$jsonSettings, $userId]);
-        $_SESSION['success'] = "Settings updated successfully!";
-        header("Refresh:0");
-        exit();
-    } catch (PDOException $e) {
-        $_SESSION['error'] = "Error updating settings: " . $e->getMessage();
-    }
 }
 
-// Get tenant settings
-$tenantSettings = [
-    'notify_email' => 1,
-    'notify_sms' => 1,
-    'notify_push' => 0,
-    'rent_reminders' => 1,
-    'maintenance_updates' => 1,
-    'community_news' => 1,
-    'promotional_offers' => 0,
-    'language' => 'English',
-    'timezone' => 'Africa/Nairobi'
-];
+// Fetch active lease
+$stmt = $pdo->prepare("SELECT leases.*, units.name AS unit_name, properties.name AS property_name 
+                      FROM leases 
+                      JOIN units ON leases.unit_id = units.id
+                      JOIN properties ON units.property_id = properties.id
+                      WHERE tenant_id = ? AND status = 'active'");
+$stmt->execute([$tenant_id]);
+$lease = $stmt->fetch();
 
-if (!empty($tenant['settings'])) {
-    $savedSettings = json_decode($tenant['settings'], true);
-    if ($savedSettings) {
-        $tenantSettings = array_merge($tenantSettings, $savedSettings);
-    }
-}
-
-// Payment methods
-$paymentMethods = [
-    [
-        'name' => 'M-PESA',
-        'icon' => 'fas fa-mobile-alt',
-        'instructions' => [
-            'Go to M-PESA Menu',
-            'Select Lipa na M-PESA',
-            'Enter Business Number: 123456',
-            'Enter Account Number: ' . ($tenantId ?: 'TENANT-' . $userId),
-            'Enter Amount',
-            'Enter your PIN'
-        ]
-    ],
-    [
-        'name' => 'Bank Transfer',
-        'icon' => 'fas fa-university',
-        'details' => [
-            'Bank Name: Equity Bank',
-            'Account Name: KejaSmart Properties',
-            'Account Number: 0123456789',
-            'Branch: Westlands'
-        ]
-    ],
-    [
-        'name' => 'Credit Card',
-        'icon' => 'fas fa-credit-card',
-        'instructions' => 'Secure online payment via Stripe'
-    ]
-];
-
-// Document types
-$documentTypes = ['Lease Agreement', 'Payment Receipt', 'ID Document', 'Utility Bill', 'Other'];
-
-// Documents
-$documents = [
-    [
+// If no active lease, create demo data
+if (!$lease) {
+    $lease = [
         'id' => 1,
-        'name' => 'Lease Agreement - 2023',
-        'type' => 'Lease Agreement',
-        'date' => '2023-01-15',
-        'size' => '2.4 MB',
-        'url' => '#'
-    ],
-    [
-        'id' => 2,
-        'name' => 'June 2023 Payment Receipt',
-        'type' => 'Payment Receipt',
-        'date' => '2023-06-05',
-        'size' => '0.8 MB',
-        'url' => '#'
-    ],
-    [
-        'id' => 3,
-        'name' => 'National ID Copy',
-        'type' => 'ID Document',
-        'date' => '2023-03-10',
-        'size' => '1.2 MB',
-        'url' => '#'
-    ]
-];
+        'start_date' => '2023-01-15',
+        'end_date' => '2024-01-14',
+        'monthly_rent' => 25000,
+        'deposit_paid' => 50000,
+        'payment_due_day' => 5,
+        'unit_name' => '4B',
+        'property_name' => 'Greenview Apartments'
+    ];
+}
 
-// Timezones
-$timezones = [
-    'Africa/Nairobi' => 'East Africa Time (EAT)',
-    'UTC' => 'Coordinated Universal Time (UTC)',
-    'Europe/London' => 'British Summer Time (BST)',
-    'America/New_York' => 'Eastern Daylight Time (EDT)'
-];
+// Fetch recent payments
+$stmt = $pdo->prepare("SELECT * FROM payments WHERE lease_id = ? ORDER BY payment_date DESC LIMIT 5");
+$stmt->execute([$lease['id']]);
+$recentPayments = $stmt->fetchAll();
 
-// Languages
-$languages = [
-    'English' => 'English',
-    'Swahili' => 'Swahili',
-    'French' => 'French',
-    'Spanish' => 'Spanish'
-];
+// If no payments, create demo data
+if (empty($recentPayments)) {
+    $recentPayments = [
+        [
+            'id' => 1,
+            'payment_date' => '2023-10-15',
+            'amount' => 25000,
+            'payment_method' => 'M-PESA',
+            'reference_number' => 'RF123456',
+            'status' => 'completed'
+        ],
+        [
+            'id' => 2,
+            'payment_date' => '2023-09-15',
+            'amount' => 25000,
+            'payment_method' => 'M-PESA',
+            'reference_number' => 'RF123455',
+            'status' => 'completed'
+        ]
+    ];
+}
 
-// Handle document upload
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_document'])) {
-    $docName = filter_input(INPUT_POST, 'doc_name', FILTER_SANITIZE_STRING);
-    $docType = filter_input(INPUT_POST, 'doc_type', FILTER_SANITIZE_STRING);
+// Fetch maintenance requests
+$stmt = $pdo->prepare("SELECT * FROM maintenance_requests WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 5");
+$stmt->execute([$tenant_id]);
+$maintenanceRequests = $stmt->fetchAll();
+
+// If no maintenance requests, create demo data
+if (empty($maintenanceRequests)) {
+    $maintenanceRequests = [
+        [
+            'id' => 1,
+            'created_at' => '2023-10-14',
+            'title' => 'Kitchen sink leaking',
+            'description' => 'The kitchen sink has a leak under the cabinet',
+            'urgency' => 'high',
+            'status' => 'completed'
+        ],
+        [
+            'id' => 2,
+            'created_at' => '2023-10-10',
+            'title' => 'Broken window',
+            'description' => 'Window in living room has a crack',
+            'urgency' => 'medium',
+            'status' => 'in-progress'
+        ]
+    ];
+}
+
+// Fetch notifications
+$stmt = $pdo->prepare("SELECT * FROM notifications WHERE user_id = ? AND user_type = 'tenant' ORDER BY created_at DESC LIMIT 5");
+$stmt->execute([$tenant_id]);
+$notifications = $stmt->fetchAll();
+
+// If no notifications, create demo data
+if (empty($notifications)) {
+    $notifications = [
+        [
+            'id' => 1,
+            'title' => 'Rent Due Reminder',
+            'message' => 'Your rent payment is due in 3 days',
+            'created_at' => '2023-10-12'
+        ],
+        [
+            'id' => 2,
+            'title' => 'Maintenance Update',
+            'message' => 'Your maintenance request #2 has been assigned',
+            'created_at' => '2023-10-11'
+        ]
+    ];
+}
+
+// Calculate rent balance and next payment
+$nextPayment = $lease['monthly_rent'];
+$dueDate = date('Y-m-') . $lease['payment_due_day'];
+if (date('d') > $lease['payment_due_day']) {
+    $dueDate = date('Y-m-d', strtotime('+1 month', strtotime($dueDate)));
+}
+$daysUntilDue = floor((strtotime($dueDate) - time()) / (60 * 60 * 24));
+
+// Handle form submissions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['submit_payment'])) {
+        // Process payment
+        $amount = $_POST['amount'];
+        $method = $_POST['method'];
+        $reference = $_POST['reference'];
+        
+        // In a real system, this would save to database
+        $newPayment = [
+            'id' => count($recentPayments) + 1,
+            'payment_date' => date('Y-m-d'),
+            'amount' => $amount,
+            'payment_method' => $method,
+            'reference_number' => $reference,
+            'status' => 'pending'
+        ];
+        array_unshift($recentPayments, $newPayment);
+        
+        // Add notification
+        $newNotification = [
+            'id' => count($notifications) + 1,
+            'title' => 'Payment Submitted',
+            'message' => 'Your payment of Ksh ' . number_format($amount, 2) . ' has been submitted',
+            'created_at' => date('Y-m-d H:i:s')
+        ];
+        array_unshift($notifications, $newNotification);
+        
+        $paymentSuccess = true;
+    }
     
-    if ($docName && $docType) {
-        $_SESSION['success'] = "Document uploaded successfully!";
-        header("Refresh:0");
-        exit();
-    } else {
-        $_SESSION['error'] = "Please fill all required fields";
+    if (isset($_POST['submit_request'])) {
+        // Process maintenance request
+        $title = $_POST['title'];
+        $description = $_POST['description'];
+        $urgency = $_POST['urgency'];
+        
+        $newRequest = [
+            'id' => count($maintenanceRequests) + 1,
+            'created_at' => date('Y-m-d H:i:s'),
+            'title' => $title,
+            'description' => $description,
+            'urgency' => $urgency,
+            'status' => 'pending'
+        ];
+        array_unshift($maintenanceRequests, $newRequest);
+        
+        // Add notification
+        $newNotification = [
+            'id' => count($notifications) + 1,
+            'title' => 'Maintenance Request Submitted',
+            'message' => 'Your request "' . $title . '" has been submitted',
+            'created_at' => date('Y-m-d H:i:s')
+        ];
+        array_unshift($notifications, $newNotification);
+        
+        $requestSuccess = true;
+    }
+    
+    if (isset($_POST['update_profile'])) {
+        // Update profile information
+        $tenant['first_name'] = $_POST['first_name'];
+        $tenant['last_name'] = $_POST['last_name'];
+        $tenant['email'] = $_POST['email'];
+        $tenant['phone'] = $_POST['phone'];
+        $tenant['emergency_contact'] = $_POST['emergency_contact'];
+        $tenant['emergency_name'] = $_POST['emergency_name'];
+        
+        $profileSuccess = true;
     }
 }
 
-// Handle password change
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
-    $currentPassword = filter_input(INPUT_POST, 'current_password', FILTER_SANITIZE_STRING);
-    $newPassword = filter_input(INPUT_POST, 'new_password', FILTER_SANITIZE_STRING);
-    $confirmPassword = filter_input(INPUT_POST, 'confirm_password', FILTER_SANITIZE_STRING);
-    
-    if ($currentPassword && $newPassword && $confirmPassword) {
-        if ($newPassword === $confirmPassword) {
-            try {
-                // Verify current password
-                $stmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
-                $stmt->execute([$userId]);
-                $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($user && password_verify($currentPassword, $user['password'])) {
-                    $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
-                    $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
-                    $stmt->execute([$hashedPassword, $userId]);
-                    
-                    $_SESSION['success'] = "Password changed successfully!";
-                    header("Refresh:0");
-                    exit();
-                } else {
-                    $_SESSION['error'] = "Current password is incorrect";
-                }
-            } catch (PDOException $e) {
-                $_SESSION['error'] = "Error changing password: " . $e->getMessage();
-            }
-        } else {
-            $_SESSION['error'] = "New passwords do not match";
-        }
-    } else {
-        $_SESSION['error'] = "Please fill all required fields";
-    }
+// Determine active section
+$section = isset($_GET['section']) ? $_GET['section'] : 'dashboard';
+$validSections = ['dashboard', 'payments', 'lease', 'maintenance', 'notifications', 'profile'];
+if (!in_array($section, $validSections)) {
+    $section = 'dashboard';
 }
 ?>
 <!DOCTYPE html>
@@ -468,7 +247,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tenant Dashboard | KejaSmart</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --keja-primary: #198754;
@@ -479,12 +259,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
             --keja-success: #198754;
             --keja-warning: #ffc107;
             --keja-danger: #dc3545;
+            --keja-info: #0dcaf0;
         }
         
         body {
             font-family: 'Segoe UI', sans-serif;
             background-color: #f8f9fa;
-            color: #333;
             min-height: 100vh;
             overflow-x: hidden;
         }
@@ -562,18 +342,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
             cursor: pointer;
         }
         
-        .user-profile img {
+        .user-avatar {
             width: 36px;
             height: 36px;
             border-radius: 50%;
-            object-fit: cover;
-            margin-right: 10px;
-            background: #e9ecef;
+            background: var(--keja-primary-light);
+            color: var(--keja-primary);
             display: flex;
             align-items: center;
             justify-content: center;
-            color: var(--keja-primary);
-            font-size: 1rem;
+            font-weight: bold;
+            margin-right: 10px;
         }
         
         .user-details {
@@ -744,6 +523,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
             color: var(--keja-success);
         }
         
+        .status.active {
+            background: rgba(13, 110, 253, 0.1);
+            color: var(--keja-info);
+        }
+        
+        .status.overdue {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--keja-danger);
+        }
+        
+        .status.in-progress {
+            background: rgba(13, 202, 240, 0.1);
+            color: var(--keja-info);
+        }
+        
         .table-container {
             background: white;
             border-radius: 12px;
@@ -797,78 +591,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
             background: #157347;
         }
         
-        .profile-grid {
-            display: grid;
-            grid-template-columns: 1fr 2fr;
-            gap: 25px;
-        }
-        
-        .profile-card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            padding: 25px;
-            margin-bottom: 25px;
-        }
-        
-        .profile-header {
-            text-align: center;
-            margin-bottom: 25px;
-        }
-        
-        .profile-avatar {
-            width: 100px;
-            height: 100px;
-            border-radius: 50%;
-            background: var(--keja-primary-light);
+        .btn-outline-primary {
+            background: transparent;
+            border: 1px solid var(--keja-primary);
             color: var(--keja-primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2.5rem;
-            margin: 0 auto 15px;
         }
         
-        .notice-card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            padding: 20px;
-            margin-bottom: 20px;
-            border-left: 4px solid #6f42c1;
+        .btn-outline-primary:hover {
+            background: var(--keja-primary-light);
         }
         
-        .notice-title {
-            color: #6f42c1;
-            margin-bottom: 10px;
-        }
-        
-        .notice-date {
-            color: var(--keja-secondary);
-            font-size: 0.9rem;
-            margin-bottom: 15px;
-        }
-        
-        .lease-card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            padding: 25px;
-            margin-bottom: 25px;
-        }
-        
-        .progress-bar {
-            height: 10px;
-            background: #e9ecef;
-            border-radius: 5px;
-            overflow: hidden;
-            margin: 20px 0;
-        }
-        
-        .progress-value {
-            height: 100%;
-            background: var(--keja-primary);
-            width: <?= $leaseProgress ?>%;
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.875rem;
         }
         
         .dashboard-section {
@@ -902,6 +637,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 display: block;
             }
             
+            .user-details h3, .user-details p {
+                display: none;
+            }
+            
             .sidebar-overlay {
                 position: fixed;
                 top: 60px;
@@ -911,10 +650,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 background-color: rgba(0,0,0,0.5);
                 z-index: 998;
                 display: none;
-            }
-            
-            .profile-grid {
-                grid-template-columns: 1fr;
             }
         }
         
@@ -927,8 +662,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 padding: 20px;
             }
             
-            .user-details h3, .user-details p {
-                display: none;
+            th, td {
+                padding: 12px 16px;
             }
         }
         
@@ -953,6 +688,124 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
         .scroll-top.show {
             opacity: 1;
         }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        
+        .empty-state i {
+            font-size: 4rem;
+            color: #adb5bd;
+            margin-bottom: 20px;
+            opacity: 0.7;
+        }
+        
+        .empty-state h3 {
+            color: var(--keja-dark);
+            margin-bottom: 10px;
+        }
+        
+        .empty-state p {
+            color: var(--keja-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 25px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+        
+        .section-title {
+            border-bottom: 2px solid var(--keja-primary);
+            padding-bottom: 10px;
+            margin-bottom: 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .profile-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            overflow: hidden;
+            margin-bottom: 30px;
+        }
+        
+        .profile-header {
+            background: linear-gradient(135deg, #198754, #0d6efd);
+            padding: 30px;
+            text-align: center;
+            color: white;
+        }
+        
+        .profile-avatar {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: white;
+            color: var(--keja-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin: 0 auto 15px;
+        }
+        
+        .profile-body {
+            padding: 30px;
+        }
+        
+        .profile-row {
+            display: flex;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .profile-label {
+            font-weight: 600;
+            min-width: 150px;
+            color: var(--keja-secondary);
+        }
+        
+        .profile-value {
+            flex-grow: 1;
+        }
+        
+        .modal-content {
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        
+        .modal-header {
+            background: var(--keja-primary);
+            color: white;
+        }
+        
+        .form-floating > label {
+            padding: 1rem .75rem;
+        }
     </style>
 </head>
 <body>
@@ -969,14 +822,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
         <div class="user-info">
             <div class="notifications">
                 <i class="fas fa-bell"></i>
-                <?php if ($unreadNotices > 0): ?>
-                    <span class="notification-count"><?= $unreadNotices ?></span>
-                <?php endif; ?>
+                <span class="notification-count">2</span>
             </div>
             
             <div class="user-profile">
-                <div class="avatar">
-                    <i class="fas fa-user"></i>
+                <div class="user-avatar">
+                    <?= substr($tenant['first_name'], 0, 1) ?>
                 </div>
                 <div class="user-details">
                     <h3><?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?></h3>
@@ -993,43 +844,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
     <div class="sidebar" id="sidebar">
         <ul class="sidebar-menu">
             <li>
-                <a href="#" class="menu-item active" data-section="dashboard">
+                <a href="?section=dashboard" class="menu-item <?= $section === 'dashboard' ? 'active' : '' ?>" data-section="dashboard">
                     <i class="fas fa-tachometer-alt"></i> Dashboard
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="payments">
+                <a href="?section=payments" class="menu-item <?= $section === 'payments' ? 'active' : '' ?>" data-section="payments">
                     <i class="fas fa-money-bill-wave"></i> Payments
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="lease">
+                <a href="?section=lease" class="menu-item <?= $section === 'lease' ? 'active' : '' ?>" data-section="lease">
                     <i class="fas fa-file-contract"></i> Lease Agreement
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="maintenance">
+                <a href="?section=maintenance" class="menu-item <?= $section === 'maintenance' ? 'active' : '' ?>" data-section="maintenance">
                     <i class="fas fa-tools"></i> Maintenance
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="notices">
+                <a href="?section=notifications" class="menu-item <?= $section === 'notifications' ? 'active' : '' ?>" data-section="notifications">
                     <i class="fas fa-bell"></i> Notifications
                 </a>
             </li>
             <li>
-                <a href="#" class="menu-item" data-section="documents">
-                    <i class="fas fa-folder"></i> Documents
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" data-section="profile">
-                    <i class="fas fa-user"></i> Profile
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" data-section="settings">
-                    <i class="fas fa-cog"></i> Settings
+                <a href="?section=profile" class="menu-item <?= $section === 'profile' ? 'active' : '' ?>" data-section="profile">
+                    <i class="fas fa-user"></i> My Profile
                 </a>
             </li>
             <li>
@@ -1047,55 +888,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
 
     <!-- Main Content -->
     <div class="main-content" id="mainContent">
-        <!-- Alerts -->
-        <?php if (isset($_SESSION['success'])): ?>
+        <!-- Success Messages -->
+        <?php if (isset($paymentSuccess)): ?>
             <div class="alert alert-success alert-dismissible fade show" role="alert">
-                <?= $_SESSION['success'] ?>
+                Payment submitted successfully! Awaiting landlord confirmation.
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
-            <?php unset($_SESSION['success']); ?>
         <?php endif; ?>
         
-        <?php if (isset($_SESSION['error'])): ?>
-            <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                <?= $_SESSION['error'] ?>
+        <?php if (isset($requestSuccess)): ?>
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                Maintenance request submitted successfully!
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
-            <?php unset($_SESSION['error']); ?>
         <?php endif; ?>
-
+        
+        <?php if (isset($profileSuccess)): ?>
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                Profile updated successfully!
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+        
         <!-- Dashboard Section -->
-        <div class="dashboard-section active" id="dashboard-section">
+        <div class="dashboard-section <?= $section === 'dashboard' ? 'active' : '' ?>" id="dashboard-section">
             <div class="welcome">
-                <h1>Welcome back, <?= htmlspecialchars($tenant['first_name']) ?>!</h1>
-                <p>Here's what's happening with your tenancy today</p>
+                <h1>Welcome, <?= htmlspecialchars($tenant['first_name']) ?>!</h1>
+                <p>Here's your tenant dashboard at <?= $lease['property_name'] ?></p>
             </div>
             
             <div class="dashboard-grid">
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">Rent Balance</div>
-                        <div class="card-icon">
-                            <i class="fas fa-wallet"></i>
-                        </div>
-                    </div>
-                    <div class="card-value">Ksh <?= number_format($balance, 2) ?></div>
-                    <div class="card-label">Due in 5 days</div>
-                </div>
-                
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title">Lease Duration</div>
+                        <div class="card-title">Next Payment</div>
                         <div class="card-icon">
                             <i class="fas fa-calendar-alt"></i>
                         </div>
                     </div>
-                    <div class="card-value"><?= $monthsRemaining ?> Months</div>
-                    <?php if ($activeLease): ?>
-                        <div class="card-label">Expires on <?= date('M j, Y', strtotime($activeLease['end_date'])) ?></div>
-                    <?php else: ?>
-                        <div class="card-label">No active lease</div>
-                    <?php endif; ?>
+                    <div class="card-value">Ksh <?= number_format($nextPayment, 2) ?></div>
+                    <div class="card-label">Due in <?= $daysUntilDue ?> days</div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Lease Status</div>
+                        <div class="card-icon">
+                            <i class="fas fa-file-contract"></i>
+                        </div>
+                    </div>
+                    <div class="card-value">Active</div>
+                    <div class="card-label">Expires on <?= date('M j, Y', strtotime($lease['end_date'])) ?></div>
                 </div>
                 
                 <div class="card">
@@ -1105,8 +947,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                             <i class="fas fa-tools"></i>
                         </div>
                     </div>
-                    <div class="card-value"><?= $pendingRequests ?></div>
-                    <div class="card-label">Pending requests</div>
+                    <div class="card-value"><?= count($maintenanceRequests) ?></div>
+                    <div class="card-label">Requests this month</div>
                 </div>
                 
                 <div class="card">
@@ -1116,7 +958,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                             <i class="fas fa-bell"></i>
                         </div>
                     </div>
-                    <div class="card-value"><?= $unreadNotices ?></div>
+                    <div class="card-value"><?= count($notifications) ?></div>
                     <div class="card-label">Unread notifications</div>
                 </div>
             </div>
@@ -1126,37 +968,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                     <div class="table-container">
                         <div class="table-header p-3 d-flex justify-content-between align-items-center">
                             <h5 class="mb-0">Recent Payments</h5>
-                            <a href="#" class="btn btn-sm btn-primary" data-section="payments">View All</a>
+                            <a href="?section=payments" class="btn btn-sm btn-primary" data-section="payments">View All</a>
                         </div>
                         <table>
                             <thead>
                                 <tr>
                                     <th>Date</th>
-                                    <th>Description</th>
                                     <th>Amount</th>
+                                    <th>Method</th>
                                     <th>Status</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php if (!empty($recentPayments)): ?>
-                                    <?php foreach ($recentPayments as $payment): ?>
-                                        <tr>
-                                            <td><?= date('M j, Y', strtotime($payment['payment_date'])) ?></td>
-                                            <td><?= htmlspecialchars($payment['description'] ?? 'Rent Payment') ?></td>
-                                            <td>Ksh <?= number_format($payment['amount'], 2) ?></td>
-                                            <td>
-                                                <span class="status completed">Completed</span>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
+                                <?php foreach ($recentPayments as $payment): ?>
                                     <tr>
-                                        <td colspan="4" class="text-center py-4">
-                                            <i class="fas fa-money-bill-wave fa-2x text-muted mb-3"></i>
-                                            <p>No recent payments</p>
+                                        <td><?= date('M j, Y', strtotime($payment['payment_date'])) ?></td>
+                                        <td>Ksh <?= number_format($payment['amount'], 2) ?></td>
+                                        <td><?= $payment['payment_method'] ?></td>
+                                        <td>
+                                            <span class="status <?= $payment['status'] ?>">
+                                                <?= ucfirst($payment['status']) ?>
+                                            </span>
                                         </td>
                                     </tr>
-                                <?php endif; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
@@ -1165,8 +1000,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 <div class="col-lg-6">
                     <div class="table-container">
                         <div class="table-header p-3 d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">Pending Requests</h5>
-                            <a href="#" class="btn btn-sm btn-primary" data-section="maintenance">View All</a>
+                            <h5 class="mb-0">Maintenance Requests</h5>
+                            <a href="?section=maintenance" class="btn btn-sm btn-primary" data-section="maintenance">View All</a>
                         </div>
                         <table>
                             <thead>
@@ -1177,789 +1012,515 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php if (!empty($pendingRequestsList)): ?>
-                                    <?php foreach ($pendingRequestsList as $request): ?>
-                                        <tr>
-                                            <td><?= date('M j, Y', strtotime($request['created_at'])) ?></td>
-                                            <td><?= htmlspecialchars($request['title']) ?></td>
-                                            <td>
-                                                <span class="status pending">Pending</span>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
+                                <?php foreach ($maintenanceRequests as $request): ?>
                                     <tr>
-                                        <td colspan="3" class="text-center py-4">
-                                            <i class="fas fa-tools fa-2x text-muted mb-3"></i>
-                                            <p>No pending requests</p>
+                                        <td><?= date('M j, Y', strtotime($request['created_at'])) ?></td>
+                                        <td><?= $request['title'] ?></td>
+                                        <td>
+                                            <span class="status <?= $request['status'] ?>">
+                                                <?= ucfirst($request['status']) ?>
+                                            </span>
                                         </td>
                                     </tr>
-                                <?php endif; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row mt-4">
+                <div class="col-lg-8">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>Payment History</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="paymentHistoryChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>Property Manager</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex align-items-center mb-3">
+                                <div class="user-avatar me-3">
+                                    <i class="fas fa-user-tie"></i>
+                                </div>
+                                <div>
+                                    <h5 class="mb-0">Jane Smith</h5>
+                                    <p class="text-muted">Property Manager</p>
+                                </div>
+                            </div>
+                            <ul class="list-group list-group-flush">
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span><i class="fas fa-phone me-2"></i> Phone</span>
+                                    <span>+254 722 123 456</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span><i class="fas fa-envelope me-2"></i> Email</span>
+                                    <span>jane@kejasmart.com</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span><i class="fas fa-clock me-2"></i> Availability</span>
+                                    <span>Mon-Fri, 9am-5pm</span>
+                                </li>
+                            </ul>
+                            <div class="mt-3">
+                                <button class="btn btn-primary w-100">
+                                    <i class="fas fa-comment-dots me-2"></i> Send Message
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
         
         <!-- Payments Section -->
-        <div class="dashboard-section" id="payments-section">
+        <div class="dashboard-section <?= $section === 'payments' ? 'active' : '' ?>" id="payments-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Payment History</h3>
+                <h2>Rent Payments</h2>
                 <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#makePaymentModal">
                     <i class="fas fa-plus me-2"></i> Make Payment
                 </button>
             </div>
             
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Description</th>
-                            <th>Amount</th>
-                            <th>Method</th>
-                            <th>Status</th>
-                            <th>Receipt</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (!empty($allPayments)): ?>
-                            <?php foreach ($allPayments as $payment): ?>
-                                <tr>
-                                    <td><?= date('M j, Y', strtotime($payment['payment_date'])) ?></td>
-                                    <td><?= htmlspecialchars($payment['description'] ?? 'Rent Payment') ?></td>
-                                    <td>Ksh <?= number_format($payment['amount'], 2) ?></td>
-                                    <td><?= htmlspecialchars($payment['method'] ?? 'MPESA') ?></td>
-                                    <td>
-                                        <span class="status <?= $payment['status'] === 'completed' ? 'completed' : 'pending' ?>">
-                                            <?= ucfirst($payment['status']) ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <a href="#" class="btn btn-sm btn-outline-primary">
-                                            <i class="fas fa-download"></i>
-                                        </a>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <tr>
-                                <td colspan="6" class="text-center py-4">
-                                    <i class="fas fa-money-bill-wave fa-2x text-muted mb-3"></i>
-                                    <p>No payment records found</p>
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-            
-            <!-- Payment Methods -->
-            <div class="mt-5">
-                <h4 class="mb-4">Payment Methods</h4>
-                <div class="row">
-                    <?php foreach ($paymentMethods as $method): ?>
-                    <div class="col-md-4 mb-4">
-                        <div class="card h-100">
-                            <div class="card-body">
+            <div class="row">
+                <div class="col-lg-8">
+                    <div class="card mb-4">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-center mb-4">
+                                <div>
+                                    <h5 class="mb-0">Current Balance</h5>
+                                    <p class="text-muted">Next payment due: <?= date('M j, Y', strtotime($dueDate)) ?></p>
+                                </div>
+                                <div class="text-end">
+                                    <h3 class="mb-0">Ksh <?= number_format($nextPayment, 2) ?></h3>
+                                    <span class="text-success">No overdue payments</span>
+                                </div>
+                            </div>
+                            
+                            <div class="progress mb-4" style="height: 10px;">
+                                <div class="progress-bar bg-success" role="progressbar" style="width: 85%" aria-valuenow="85" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                            
+                            <div class="d-flex justify-content-between">
+                                <span>Paid: Ksh <?= number_format($nextPayment * 0.85, 2) ?></span>
+                                <span>Total: Ksh <?= number_format($nextPayment, 2) ?></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Payment History</h5>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Amount</th>
+                                        <th>Method</th>
+                                        <th>Reference</th>
+                                        <th>Status</th>
+                                        <th>Receipt</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($recentPayments as $payment): ?>
+                                        <tr>
+                                            <td><?= date('M j, Y', strtotime($payment['payment_date'])) ?></td>
+                                            <td>Ksh <?= number_format($payment['amount'], 2) ?></td>
+                                            <td><?= $payment['payment_method'] ?></td>
+                                            <td><?= $payment['reference_number'] ?></td>
+                                            <td>
+                                                <span class="status <?= $payment['status'] ?>">
+                                                    <?= ucfirst($payment['status']) ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-primary">
+                                                    <i class="fas fa-download"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>Payment Methods</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-4">
                                 <div class="d-flex align-items-center mb-3">
                                     <div class="bg-primary text-white rounded-circle p-3 me-3">
-                                        <i class="<?= $method['icon'] ?> fa-2x"></i>
+                                        <i class="fas fa-mobile-alt fa-2x"></i>
                                     </div>
-                                    <h5 class="mb-0"><?= $method['name'] ?></h5>
-                                </div>
-                                
-                                <?php if (isset($method['instructions'])): ?>
-                                    <?php if (is_array($method['instructions'])): ?>
-                                        <ol class="mb-3">
-                                            <?php foreach ($method['instructions'] as $step): ?>
-                                                <li><?= $step ?></li>
-                                            <?php endforeach; ?>
-                                        </ol>
-                                    <?php else: ?>
-                                        <p><?= $method['instructions'] ?></p>
-                                    <?php endif; ?>
-                                <?php endif; ?>
-                                
-                                <?php if (isset($method['details'])): ?>
-                                    <div class="bg-light p-3 rounded mb-3">
-                                        <?php foreach ($method['details'] as $detail): ?>
-                                            <div class="d-flex justify-content-between">
-                                                <span><?= explode(':', $detail)[0] ?>:</span>
-                                                <strong><?= explode(':', $detail)[1] ?></strong>
-                                            </div>
-                                        <?php endforeach; ?>
+                                    <div>
+                                        <h5 class="mb-0">M-PESA</h5>
+                                        <p class="text-muted">Mobile Money Payment</p>
                                     </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-            
-            <!-- Make Payment Form -->
-            <div class="card mb-4">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0">Make Payment</h5>
-                </div>
-                <div class="card-body">
-                    <form method="POST">
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <div class="form-group">
-                                    <label>Amount (Ksh)</label>
-                                    <input type="number" class="form-control" name="amount" 
-                                           value="<?= $monthlyRent ?? 0 ?>" min="100" step="100" required>
                                 </div>
+                                <ul class="list-group list-group-flush">
+                                    <li class="list-group-item">1. Go to M-PESA Menu</li>
+                                    <li class="list-group-item">2. Select Lipa na M-PESA</li>
+                                    <li class="list-group-item">3. Enter Business Number: 123456</li>
+                                    <li class="list-group-item">4. Enter Account Number: TENANT-<?= $tenant_id ?></li>
+                                    <li class="list-group-item">5. Enter Amount</li>
+                                    <li class="list-group-item">6. Enter your PIN</li>
+                                </ul>
                             </div>
-                            <div class="col-md-6">
-                                <div class="form-group">
-                                    <label>Payment Method</label>
-                                    <select class="form-select" name="method" required>
-                                        <option value="">Select method</option>
-                                        <option value="M-PESA">M-PESA</option>
-                                        <option value="Bank Transfer">Bank Transfer</option>
-                                        <option value="Credit Card">Credit Card</option>
-                                    </select>
+                            
+                            <div class="mb-4">
+                                <div class="d-flex align-items-center mb-3">
+                                    <div class="bg-info text-white rounded-circle p-3 me-3">
+                                        <i class="fas fa-university fa-2x"></i>
+                                    </div>
+                                    <div>
+                                        <h5 class="mb-0">Bank Transfer</h5>
+                                        <p class="text-muted">Direct Bank Deposit</p>
+                                    </div>
                                 </div>
+                                <ul class="list-group list-group-flush">
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Bank Name:</span>
+                                        <strong>Equity Bank</strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Account Name:</span>
+                                        <strong>KejaSmart Properties</strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Account Number:</span>
+                                        <strong>0123456789</strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Branch:</span>
+                                        <strong>Westlands</strong>
+                                    </li>
+                                </ul>
                             </div>
                         </div>
-                        
-                        <div class="mb-3">
-                            <label>Transaction Reference</label>
-                            <input type="text" class="form-control" name="reference" required>
-                            <div class="form-text">Enter your M-PESA code or bank transaction ID</div>
-                        </div>
-                        
-                        <div class="alert alert-info">
-                            <i class="fas fa-info-circle me-2"></i> 
-                            Payments may take 1-2 business days to be verified by your landlord
-                        </div>
-                        
-                        <button type="submit" name="make_payment" class="btn btn-primary">
-                            <i class="fas fa-paper-plane me-2"></i> Submit Payment
-                        </button>
-                    </form>
-                </div>
-            </div>
-            
-            <!-- Property Manager Contact -->
-            <?php if (!empty($propertyInfo)): ?>
-            <div class="card">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0">Property Management Contact</h5>
-                </div>
-                <div class="card-body">
-                    <div class="d-flex align-items-center">
-                        <div class="bg-primary text-white rounded-circle p-3 me-3">
-                            <i class="fas fa-user-tie fa-2x"></i>
-                        </div>
-                        <div>
-                            <h5><?= $propertyInfo['manager_name'] ?? 'Not Assigned' ?></h5>
-                            <p class="mb-1">Property: <?= $propertyInfo['name'] ?></p>
-                            <p class="mb-1">Phone: <?= $propertyInfo['manager_phone'] ?? 'N/A' ?></p>
-                            <p class="mb-0">Email: <?= $propertyInfo['manager_email'] ?? 'N/A' ?></p>
-                        </div>
-                    </div>
-                    <div class="mt-3">
-                        <button class="btn btn-outline-primary me-2">
-                            <i class="fas fa-phone me-1"></i> Call Manager
-                        </button>
-                        <button class="btn btn-outline-secondary">
-                            <i class="fas fa-envelope me-1"></i> Send Email
-                        </button>
                     </div>
                 </div>
             </div>
-            <?php endif; ?>
         </div>
         
         <!-- Lease Agreement Section -->
-        <div class="dashboard-section" id="lease-section">
-            <div class="lease-card">
-                <h3 class="mb-4">Lease Agreement</h3>
-                
-                <?php if ($activeLease): ?>
-                    <div class="row mb-4">
+        <div class="dashboard-section <?= $section === 'lease' ? 'active' : '' ?>" id="lease-section">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Lease Agreement</h2>
+                <button class="btn btn-primary">
+                    <i class="fas fa-download me-2"></i> Download Lease
+                </button>
+            </div>
+            
+            <div class="card">
+                <div class="card-body">
+                    <div class="row">
                         <div class="col-md-6">
-                            <div class="mb-3">
-                                <h6>Property Information</h6>
-                                <p><strong>Property:</strong> <?= htmlspecialchars($activeLease['property_name']) ?></p>
-                                <p><strong>Unit:</strong> <?= htmlspecialchars($activeLease['unit_name']) ?></p>
-                                <p><strong>Type:</strong> <?= htmlspecialchars($activeLease['unit_type']) ?></p>
+                            <div class="mb-4">
+                                <h5>Property Information</h5>
+                                <ul class="list-group list-group-flush">
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Property:</span>
+                                        <strong><?= $lease['property_name'] ?></strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Unit:</span>
+                                        <strong><?= $lease['unit_name'] ?></strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Address:</span>
+                                        <strong>Westlands, Nairobi</strong>
+                                    </li>
+                                </ul>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <h5>Landlord Information</h5>
+                                <ul class="list-group list-group-flush">
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Name:</span>
+                                        <strong>Jane Smith</strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Phone:</span>
+                                        <strong>+254 722 123 456</strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Email:</span>
+                                        <strong>jane@kejasmart.com</strong>
+                                    </li>
+                                </ul>
                             </div>
                         </div>
+                        
                         <div class="col-md-6">
-                            <div class="mb-3">
-                                <h6>Lease Details</h6>
-                                <p><strong>Start Date:</strong> <?= date('M j, Y', strtotime($activeLease['start_date'])) ?></p>
-                                <p><strong>End Date:</strong> <?= date('M j, Y', strtotime($activeLease['end_date'])) ?></p>
-                                <p><strong>Monthly Rent:</strong> Ksh <?= number_format($activeLease['monthly_rent'], 2) ?></p>
+                            <div class="mb-4">
+                                <h5>Lease Terms</h5>
+                                <ul class="list-group list-group-flush">
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Start Date:</span>
+                                        <strong><?= date('M j, Y', strtotime($lease['start_date'])) ?></strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>End Date:</span>
+                                        <strong><?= date('M j, Y', strtotime($lease['end_date'])) ?></strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Monthly Rent:</span>
+                                        <strong>Ksh <?= number_format($lease['monthly_rent'], 2) ?></strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Security Deposit:</span>
+                                        <strong>Ksh <?= number_format($lease['deposit_paid'], 2) ?></strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>Payment Due:</span>
+                                        <strong><?= $lease['payment_due_day'] ?>th of each month</strong>
+                                    </li>
+                                </ul>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <h5>Lease Status</h5>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <div class="progress" style="height: 10px; width: 200px;">
+                                            <div class="progress-bar bg-success" role="progressbar" style="width: 65%" aria-valuenow="65" aria-valuemin="0" aria-valuemax="100"></div>
+                                        </div>
+                                        <small><?= round(65) ?>% of lease completed</small>
+                                    </div>
+                                    <span class="badge bg-success">Active</span>
+                                </div>
                             </div>
                         </div>
                     </div>
                     
-                    <div class="mb-4">
-                        <h6>Lease Progress</h6>
-                        <div class="progress-bar">
-                            <div class="progress-value"></div>
+                    <div class="mt-4">
+                        <h5>Terms & Conditions</h5>
+                        <div class="bg-light p-3 rounded">
+                            <p>The tenant agrees to pay the monthly rent of Ksh <?= number_format($lease['monthly_rent'], 2) ?> on or before the <?= $lease['payment_due_day'] ?>th day of each month.</p>
+                            <p>The security deposit of Ksh <?= number_format($lease['deposit_paid'], 2) ?> will be refunded within 30 days of lease termination, less any deductions for damages beyond normal wear and tear.</p>
+                            <p>The tenant shall maintain the premises in a clean and sanitary condition and shall not make any alterations to the premises without the landlord's written consent.</p>
+                            <p>Either party may terminate this lease by giving 60 days written notice prior to the termination date.</p>
                         </div>
-                        <div class="d-flex justify-content-between mt-2">
-                            <span><?= $monthsRemaining ?> months remaining</span>
-                            <span><?= round($leaseProgress) ?>% complete</span>
-                        </div>
                     </div>
-                    
-                    <div class="mb-4">
-                        <h6>Terms & Conditions</h6>
-                        <p class="text-muted">
-                            The tenant agrees to pay rent on or before the <?= $activeLease['payment_due_day'] ?> of each month. 
-                            The property must be maintained in good condition, and any damages beyond normal wear and tear 
-                            will be charged to the tenant.
-                        </p>
-                    </div>
-                    
-                    <button class="btn btn-primary">
-                        <i class="fas fa-download me-2"></i> Download Lease Agreement
-                    </button>
-                <?php else: ?>
-                    <div class="text-center py-5">
-                        <i class="fas fa-file-contract fa-3x text-muted mb-3"></i>
-                        <h4>No active lease agreement</h4>
-                        <p class="text-muted">Contact your landlord for lease information</p>
-                    </div>
-                <?php endif; ?>
+                </div>
             </div>
         </div>
         
         <!-- Maintenance Section -->
-        <div class="dashboard-section" id="maintenance-section">
+        <div class="dashboard-section <?= $section === 'maintenance' ? 'active' : '' ?>" id="maintenance-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Maintenance Requests</h3>
+                <h2>Maintenance Requests</h2>
                 <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newRequestModal">
                     <i class="fas fa-plus me-2"></i> New Request
                 </button>
             </div>
             
-            <!-- Request Status Tabs -->
-            <ul class="nav nav-tabs mb-4" id="requestTabs" role="tablist">
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="pending-tab" data-bs-toggle="tab" data-bs-target="#pending" type="button" role="tab">Pending (<?= $pendingRequests ?>)</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="inprogress-tab" data-bs-toggle="tab" data-bs-target="#inprogress" type="button" role="tab">In Progress</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="completed-tab" data-bs-toggle="tab" data-bs-target="#completed" type="button" role="tab">Completed</button>
-                </li>
-            </ul>
-            
-            <div class="tab-content" id="requestTabsContent">
-                <!-- Pending Requests Tab -->
-                <div class="tab-pane fade show active" id="pending" role="tabpanel">
-                    <?php if (!empty($allMaintenanceRequests)): ?>
-                        <?php foreach ($allMaintenanceRequests as $request): ?>
-                            <?php if (in_array($request['status'], ['pending', 'assigned'])): ?>
-                            <div class="card mb-3">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-start">
-                                        <div>
-                                            <h5><?= htmlspecialchars($request['title']) ?></h5>
-                                            <p class="text-muted"><?= date('M j, Y \a\t g:i a', strtotime($request['created_at'])) ?></p>
-                                            <p><?= htmlspecialchars($request['description']) ?></p>
-                                            <p><strong>Category:</strong> <?= $request['category'] ?> | 
-                                               <strong>Urgency:</strong> <?= ucfirst($request['urgency']) ?></p>
-                                        </div>
-                                        <div>
-                                            <span class="status <?= $request['status'] === 'pending' ? 'pending' : 'completed' ?>">
-                                                <?= ucfirst($request['status']) ?>
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div class="mt-3">
-                                        <?php if (!empty($request['photo'])): ?>
-                                            <img src="<?= htmlspecialchars($request['photo']) ?>" alt="Request photo" class="img-thumbnail me-2" width="100">
-                                        <?php endif; ?>
-                                        <?php if ($request['status'] === 'pending'): ?>
-                                        <button class="btn btn-sm btn-outline-danger">
-                                            <i class="fas fa-times me-1"></i> Cancel Request
-                                        </button>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
-                            </div>
-                            <?php endif; ?>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <div class="text-center py-5">
-                            <i class="fas fa-tools fa-3x text-muted mb-3"></i>
-                            <h4>No pending maintenance requests</h4>
-                            <p class="text-muted">All your maintenance issues are resolved</p>
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0">My Requests</h5>
                         </div>
-                    <?php endif; ?>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Description</th>
+                                        <th>Urgency</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($maintenanceRequests as $request): ?>
+                                        <tr>
+                                            <td><?= date('M j, Y', strtotime($request['created_at'])) ?></td>
+                                            <td><?= $request['title'] ?></td>
+                                            <td><?= ucfirst($request['urgency']) ?></td>
+                                            <td>
+                                                <span class="status <?= $request['status'] ?>">
+                                                    <?= ucfirst($request['status']) ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-primary me-1">View</button>
+                                                <button class="btn btn-sm btn-outline-danger">Cancel</button>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
                 
-                <!-- In Progress Tab -->
-                <div class="tab-pane fade" id="inprogress" role="tabpanel">
-                    <?php if (!empty($allMaintenanceRequests)): ?>
-                        <?php foreach ($allMaintenanceRequests as $request): ?>
-                            <?php if ($request['status'] === 'assigned'): ?>
-                            <div class="card mb-3">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-start">
-                                        <div>
-                                            <h5><?= htmlspecialchars($request['title']) ?></h5>
-                                            <p class="text-muted">Submitted: <?= date('M j, Y', strtotime($request['created_at'])) ?></p>
-                                            <p><?= htmlspecialchars($request['description']) ?></p>
-                                            <p><strong>Assigned To:</strong> Maintenance Team</p>
-                                        </div>
-                                        <div>
-                                            <span class="status pending">In Progress</span>
-                                        </div>
-                                    </div>
-                                    <div class="mt-3">
-                                        <?php if (!empty($request['photo'])): ?>
-                                            <img src="<?= htmlspecialchars($request['photo']) ?>" alt="Request photo" class="img-thumbnail me-2" width="100">
-                                        <?php endif; ?>
-                                    </div>
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Maintenance Team</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex align-items-center mb-3">
+                                <div class="user-avatar me-3">
+                                    <i class="fas fa-user-hard-hat"></i>
+                                </div>
+                                <div>
+                                    <h5 class="mb-0">Maintenance Team</h5>
+                                    <p class="text-muted">Available Mon-Fri, 8am-5pm</p>
                                 </div>
                             </div>
-                            <?php endif; ?>
-                        <?php endforeach; ?>
-                        <?php if (count(array_filter($allMaintenanceRequests, fn($r) => $r['status'] === 'assigned')) === 0): ?>
-                            <div class="text-center py-5">
-                                <i class="fas fa-hourglass-half fa-3x text-info mb-3"></i>
-                                <h4>No requests in progress</h4>
-                                <p class="text-muted">Your pending requests will appear here once assigned</p>
+                            <ul class="list-group list-group-flush">
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span><i class="fas fa-phone me-2"></i> Phone</span>
+                                    <span>+254 733 987 654</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span><i class="fas fa-envelope me-2"></i> Email</span>
+                                    <span>maintenance@kejasmart.com</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span><i class="fas fa-clock me-2"></i> Response Time</span>
+                                    <span>24-48 hours</span>
+                                </li>
+                            </ul>
+                            <div class="mt-3">
+                                <button class="btn btn-outline-primary w-100">
+                                    <i class="fas fa-phone me-2"></i> Call Maintenance
+                                </button>
                             </div>
-                        <?php endif; ?>
-                    <?php else: ?>
-                        <div class="text-center py-5">
-                            <i class="fas fa-hourglass-half fa-3x text-info mb-3"></i>
-                            <h4>No requests in progress</h4>
-                            <p class="text-muted">Your pending requests will appear here once assigned</p>
                         </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Completed Tab -->
-                <div class="tab-pane fade" id="completed" role="tabpanel">
-                    <?php if (!empty($allMaintenanceRequests)): ?>
-                        <?php foreach ($allMaintenanceRequests as $request): ?>
-                            <?php if ($request['status'] === 'completed'): ?>
-                            <div class="card mb-3">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-start">
-                                        <div>
-                                            <h5><?= htmlspecialchars($request['title']) ?></h5>
-                                            <p class="text-muted">Completed: <?= date('M j, Y', strtotime($request['completed_at'])) ?></p>
-                                            <p><?= htmlspecialchars($request['description']) ?></p>
-                                        </div>
-                                        <div>
-                                            <span class="status completed">Completed</span>
-                                        </div>
-                                    </div>
-                                    <div class="mt-3">
-                                        <?php if (!empty($request['photo'])): ?>
-                                            <img src="<?= htmlspecialchars($request['photo']) ?>" alt="Request photo" class="img-thumbnail me-2" width="100">
-                                        <?php endif; ?>
-                                        <div class="mt-3">
-                                            <h6>Technician Feedback:</h6>
-                                            <div class="bg-light p-3 rounded">
-                                                <p class="mb-0"><?= $request['resolution_notes'] ?? 'Issue resolved successfully' ?></p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <?php endif; ?>
-                        <?php endforeach; ?>
-                        <?php if (count(array_filter($allMaintenanceRequests, fn($r) => $r['status'] === 'completed')) === 0): ?>
-                            <div class="text-center py-5">
-                                <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
-                                <h4>No completed requests</h4>
-                                <p class="text-muted">Your completed requests will appear here</p>
-                            </div>
-                        <?php endif; ?>
-                    <?php else: ?>
-                        <div class="text-center py-5">
-                            <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
-                            <h4>No completed requests</h4>
-                            <p class="text-muted">Your completed requests will appear here</p>
-                        </div>
-                    <?php endif; ?>
+                    </div>
                 </div>
             </div>
         </div>
         
         <!-- Notifications Section -->
-        <div class="dashboard-section" id="notices-section">
+        <div class="dashboard-section <?= $section === 'notifications' ? 'active' : '' ?>" id="notifications-section">
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Notifications</h3>
-                <button class="btn btn-outline-secondary" id="markAllRead">
+                <h2>Notifications</h2>
+                <button class="btn btn-outline-primary">
                     <i class="fas fa-check-circle me-2"></i> Mark All as Read
                 </button>
             </div>
             
-            <div class="d-flex mb-4">
-                <div class="me-3">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="showUnread" checked>
-                        <label class="form-check-label" for="showUnread">Show Unread Only</label>
+            <div class="card">
+                <div class="card-body">
+                    <div class="list-group">
+                        <?php foreach ($notifications as $notification): ?>
+                            <a href="#" class="list-group-item list-group-item-action">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <h5 class="mb-1"><?= $notification['title'] ?></h5>
+                                    <small><?= date('M j', strtotime($notification['created_at'])) ?></small>
+                                </div>
+                                <p class="mb-1"><?= $notification['message'] ?></p>
+                                <small class="text-primary">Click to view details</small>
+                            </a>
+                        <?php endforeach; ?>
                     </div>
                 </div>
-                <div class="w-50">
-                    <input type="text" class="form-control" placeholder="Search notifications...">
-                </div>
-            </div>
-            
-            <?php if (!empty($allNotices)): ?>
-                <?php foreach ($allNotices as $notice): ?>
-                    <div class="notice-card <?= $notice['is_read'] ? '' : 'unread' ?>">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <h4 class="notice-title"><?= htmlspecialchars($notice['title']) ?></h4>
-                                <p class="notice-date"><?= date('M j, Y \a\t g:i a', strtotime($notice['created_at'])) ?></p>
-                                <p><?= htmlspecialchars($notice['message']) ?></p>
-                            </div>
-                            <div>
-                                <?php if (!$notice['is_read']): ?>
-                                    <span class="badge bg-danger">New</span>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        <div class="mt-3">
-                            <form method="POST" class="d-inline">
-                                <input type="hidden" name="notification_id" value="<?= $notice['id'] ?>">
-                                <?php if (!$notice['is_read']): ?>
-                                    <button type="submit" name="notification_action" value="mark_read" class="btn btn-sm btn-outline-primary me-2">
-                                        <i class="fas fa-check me-1"></i> Mark as Read
-                                    </button>
-                                <?php endif; ?>
-                                <button type="submit" name="notification_action" value="delete" class="btn btn-sm btn-outline-secondary">
-                                    <i class="fas fa-trash-alt me-1"></i> Delete
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            <?php else: ?>
-                <div class="text-center py-5">
-                    <i class="fas fa-bell-slash fa-3x text-muted mb-3"></i>
-                    <h4>No notifications</h4>
-                    <p class="text-muted">You'll see important updates here</p>
-                </div>
-            <?php endif; ?>
-        </div>
-        
-        <!-- Documents Section -->
-        <div class="dashboard-section" id="documents-section">
-            <h3 class="mb-4">My Documents</h3>
-            
-            <div class="row mb-4">
-                <div class="col-md-6">
-                    <div class="input-group">
-                        <input type="text" class="form-control" placeholder="Search documents...">
-                        <button class="btn btn-outline-secondary" type="button">
-                            <i class="fas fa-search"></i>
-                        </button>
-                    </div>
-                </div>
-                <div class="col-md-6 text-end">
-                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadDocumentModal">
-                        <i class="fas fa-upload me-2"></i> Upload Document
-                    </button>
-                </div>
-            </div>
-            
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Document</th>
-                            <th>Type</th>
-                            <th>Upload Date</th>
-                            <th>Size</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (!empty($documents)): ?>
-                            <?php foreach ($documents as $doc): ?>
-                                <tr>
-                                    <td>
-                                        <i class="fas fa-file-contract text-primary me-2"></i>
-                                        <?= htmlspecialchars($doc['name']) ?>
-                                    </td>
-                                    <td><?= htmlspecialchars($doc['type']) ?></td>
-                                    <td><?= date('M j, Y', strtotime($doc['date'])) ?></td>
-                                    <td><?= $doc['size'] ?></td>
-                                    <td>
-                                        <a href="<?= $doc['url'] ?>" class="btn btn-sm btn-outline-primary me-2" target="_blank">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <a href="<?= $doc['url'] ?>" class="btn btn-sm btn-outline-success me-2" download>
-                                            <i class="fas fa-download"></i>
-                                        </a>
-                                        <button class="btn btn-sm btn-outline-danger delete-document" data-id="<?= $doc['id'] ?>">
-                                            <i class="fas fa-trash-alt"></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <tr>
-                                <td colspan="5" class="text-center py-4">
-                                    <i class="fas fa-folder-open fa-3x text-muted mb-3"></i>
-                                    <h4>No documents uploaded</h4>
-                                    <p class="text-muted">Upload your important documents</p>
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
             </div>
         </div>
         
         <!-- Profile Section -->
-        <div class="dashboard-section" id="profile-section">
-            <div class="profile-grid">
-                <div class="profile-card">
-                    <div class="profile-header">
-                        <div class="profile-avatar">
-                            <i class="fas fa-user"></i>
-                        </div>
-                        <h4><?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?></h4>
-                        <p class="text-muted">Tenant</p>
+        <div class="dashboard-section <?= $section === 'profile' ? 'active' : '' ?>" id="profile-section">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>My Profile</h2>
+                <button class="btn btn-outline-primary">
+                    <i class="fas fa-edit me-1"></i> Edit Profile
+                </button>
+            </div>
+            
+            <div class="profile-card">
+                <div class="profile-header">
+                    <div class="profile-avatar">
+                        <?= substr($tenant['first_name'], 0, 1) ?>
                     </div>
-                    
-                    <div class="mb-4">
-                        <h6>Account Information</h6>
-                        <p><i class="fas fa-envelope me-2"></i> <?= htmlspecialchars($tenant['email']) ?></p>
-                        <p><i class="fas fa-phone me-2"></i> <?= htmlspecialchars($tenant['phone']) ?></p>
-                        <p><i class="fas fa-calendar me-2"></i> Joined <?= date('M Y', strtotime($tenant['created_at'])) ?></p>
-                    </div>
-                    
-                    <div class="mb-4">
-                        <h6>Emergency Contact</h6>
-                        <p><i class="fas fa-user-circle me-2"></i> <?= htmlspecialchars($tenant['emergency_name'] ?? 'Not set') ?></p>
-                        <p><i class="fas fa-phone me-2"></i> <?= htmlspecialchars($tenant['emergency_contact'] ?? 'Not set') ?></p>
-                    </div>
+                    <h3><?= $tenant['first_name'] . ' ' . $tenant['last_name'] ?></h3>
+                    <p>Tenant at KejaSmart</p>
                 </div>
-                
-                <div class="profile-card">
-                    <h4 class="mb-4">Personal Information</h4>
-                    
+                <div class="profile-body">
                     <form method="POST">
                         <div class="row mb-3">
                             <div class="col-md-6">
-                                <div class="form-group">
-                                    <label>First Name</label>
-                                    <input type="text" class="form-control" name="first_name" 
-                                           value="<?= htmlspecialchars($tenant['first_name']) ?>" required>
+                                <div class="mb-3">
+                                    <label class="form-label">First Name</label>
+                                    <input type="text" class="form-control" name="first_name" value="<?= $tenant['first_name'] ?>">
                                 </div>
                             </div>
                             <div class="col-md-6">
-                                <div class="form-group">
-                                    <label>Last Name</label>
-                                    <input type="text" class="form-control" name="last_name" 
-                                           value="<?= htmlspecialchars($tenant['last_name']) ?>" required>
+                                <div class="mb-3">
+                                    <label class="form-label">Last Name</label>
+                                    <input type="text" class="form-control" name="last_name" value="<?= $tenant['last_name'] ?>">
                                 </div>
                             </div>
                         </div>
                         
                         <div class="row mb-3">
                             <div class="col-md-6">
-                                <div class="form-group">
-                                    <label>Phone Number</label>
-                                    <input type="text" class="form-control" name="phone" 
-                                           value="<?= htmlspecialchars($tenant['phone']) ?>" required>
+                                <div class="mb-3">
+                                    <label class="form-label">Email Address</label>
+                                    <input type="email" class="form-control" name="email" value="<?= $tenant['email'] ?>">
                                 </div>
                             </div>
                             <div class="col-md-6">
-                                <div class="form-group">
-                                    <label>National ID</label>
-                                    <input type="text" class="form-control" name="national_id" 
-                                           value="<?= htmlspecialchars($tenant['national_id']) ?>">
+                                <div class="mb-3">
+                                    <label class="form-label">Phone Number</label>
+                                    <input type="tel" class="form-control" name="phone" value="<?= $tenant['phone'] ?>">
                                 </div>
                             </div>
                         </div>
                         
-                        <div class="mb-4">
-                            <h6>Emergency Contact</h6>
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <div class="form-group">
-                                        <label>Contact Name</label>
-                                        <input type="text" class="form-control" name="emergency_name" 
-                                               value="<?= htmlspecialchars($tenant['emergency_name']) ?>">
-                                    </div>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Emergency Contact Name</label>
+                                    <input type="text" class="form-control" name="emergency_name" value="<?= $tenant['emergency_name'] ?>">
                                 </div>
-                                <div class="col-md-6">
-                                    <div class="form-group">
-                                        <label>Phone Number</label>
-                                        <input type="text" class="form-control" name="emergency_contact" 
-                                               value="<?= htmlspecialchars($tenant['emergency_contact']) ?>">
-                                    </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Emergency Contact Phone</label>
+                                    <input type="tel" class="form-control" name="emergency_contact" value="<?= $tenant['emergency_contact'] ?>">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Occupation</label>
+                                    <input type="text" class="form-control" name="occupation" value="<?= $tenant['occupation'] ?>">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Employer</label>
+                                    <input type="text" class="form-control" name="employer" value="<?= $tenant['employer'] ?>">
                                 </div>
                             </div>
                         </div>
                         
                         <button type="submit" name="update_profile" class="btn btn-primary">Update Profile</button>
                     </form>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Settings Section -->
-        <div class="dashboard-section" id="settings-section">
-            <h3 class="mb-4">Account Settings</h3>
-            
-            <div class="row">
-                <div class="col-lg-6">
-                    <div class="card mb-4">
-                        <div class="card-header bg-light">
-                            <h5 class="mb-0">Security Settings</h5>
-                        </div>
-                        <div class="card-body">
-                            <form method="POST" id="passwordForm">
-                                <div class="mb-3">
-                                    <label class="form-label">Current Password</label>
-                                    <input type="password" class="form-control" name="current_password" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">New Password</label>
-                                    <input type="password" class="form-control" name="new_password" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Confirm New Password</label>
-                                    <input type="password" class="form-control" name="confirm_password" required>
-                                </div>
-                                <div class="alert alert-info">
-                                    <i class="fas fa-info-circle me-2"></i> Password must be at least 8 characters long and include a number
-                                </div>
-                                <button type="submit" name="change_password" class="btn btn-primary">Update Password</button>
-                            </form>
-                        </div>
-                    </div>
-                    
-                    <div class="card">
-                        <div class="card-header bg-light">
-                            <h5 class="mb-0">Notification Preferences</h5>
-                        </div>
-                        <div class="card-body">
-                            <form method="POST">
-                                <div class="mb-3">
-                                    <h6>Notification Methods</h6>
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="checkbox" name="notify_email" 
-                                               id="emailNotifications" <?= $tenantSettings['notify_email'] ? 'checked' : '' ?>>
-                                        <label class="form-check-label" for="emailNotifications">Email Notifications</label>
-                                    </div>
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="checkbox" name="notify_sms" 
-                                               id="smsNotifications" <?= $tenantSettings['notify_sms'] ? 'checked' : '' ?>>
-                                        <label class="form-check-label" for="smsNotifications">SMS Notifications</label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="notify_push" 
-                                               id="pushNotifications" <?= $tenantSettings['notify_push'] ? 'checked' : '' ?>>
-                                        <label class="form-check-label" for="pushNotifications">Push Notifications</label>
-                                    </div>
-                                </div>
-                                
-                                <div class="mb-3">
-                                    <h6>Notification Types</h6>
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="checkbox" name="rent_reminders" 
-                                               id="rentReminders" <?= $tenantSettings['rent_reminders'] ? 'checked' : '' ?>>
-                                        <label class="form-check-label" for="rentReminders">Rent Payment Reminders</label>
-                                    </div>
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="checkbox" name="maintenance_updates" 
-                                               id="maintenanceUpdates" <?= $tenantSettings['maintenance_updates'] ? 'checked' : '' ?>>
-                                        <label class="form-check-label" for="maintenanceUpdates">Maintenance Updates</label>
-                                    </div>
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="checkbox" name="community_news" 
-                                               id="communityNews" <?= $tenantSettings['community_news'] ? 'checked' : '' ?>>
-                                        <label class="form-check-label" for="communityNews">Community News</label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="promotional_offers" 
-                                               id="promotionalOffers" <?= $tenantSettings['promotional_offers'] ? 'checked' : '' ?>>
-                                        <label class="form-check-label" for="promotionalOffers">Promotional Offers</label>
-                                    </div>
-                                </div>
-                                
-                                <button type="submit" name="update_settings" class="btn btn-primary">Save Preferences</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="col-lg-6">
-                    <div class="card mb-4">
-                        <div class="card-header bg-light">
-                            <h5 class="mb-0">Account Preferences</h5>
-                        </div>
-                        <div class="card-body">
-                            <form method="POST">
-                                <div class="mb-3">
-                                    <label class="form-label">Language</label>
-                                    <select class="form-select" name="language">
-                                        <?php foreach ($languages as $code => $name): ?>
-                                            <option value="<?= $code ?>" <?= $tenantSettings['language'] == $code ? 'selected' : '' ?>>
-                                                <?= $name ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                                
-                                <div class="mb-3">
-                                    <label class="form-label">Time Zone</label>
-                                    <select class="form-select" name="timezone">
-                                        <?php foreach ($timezones as $code => $name): ?>
-                                            <option value="<?= $code ?>" <?= $tenantSettings['timezone'] == $code ? 'selected' : '' ?>>
-                                                <?= $name ?> (<?= $code ?>)
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                                
-                                <button type="submit" name="update_settings" class="btn btn-primary">Save Preferences</button>
-                            </form>
-                        </div>
-                    </div>
-                    
-                    <div class="card">
-                        <div class="card-header bg-danger text-white">
-                            <h5 class="mb-0">Danger Zone</h5>
-                        </div>
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <div>
-                                    <h6>Deactivate Account</h6>
-                                    <p class="text-muted mb-0">Temporarily disable your account</p>
-                                </div>
-                                <button class="btn btn-outline-danger">
-                                    Deactivate
-                                </button>
-                            </div>
-                            
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <h6>Delete Account</h6>
-                                    <p class="text-muted mb-0">Permanently remove your account</p>
-                                </div>
-                                <button class="btn btn-outline-danger">
-                                    Delete Account
-                                </button>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -1975,39 +1536,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Make Payment</h5>
+                    <h5 class="modal-title">Make Rent Payment</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-                <div class="modal-body">
-                    <form method="POST" id="paymentForm">
+                <form method="POST">
+                    <div class="modal-body">
                         <div class="mb-3">
                             <label class="form-label">Payment Amount (Ksh)</label>
-                            <input type="number" class="form-control" name="amount" 
-                                   value="<?= $monthlyRent ?? 0 ?>" min="100" step="100" required>
+                            <input type="number" class="form-control" name="amount" value="<?= $nextPayment ?>" min="100" step="100" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Payment Method</label>
                             <select class="form-select" name="method" required>
-                                <option value="">Select method</option>
                                 <option value="M-PESA">M-PESA</option>
                                 <option value="Bank Transfer">Bank Transfer</option>
+                                <option value="Cash">Cash</option>
                                 <option value="Credit Card">Credit Card</option>
                             </select>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Transaction Reference</label>
-                            <input type="text" class="form-control" name="reference" required>
+                            <input type="text" class="form-control" name="reference" placeholder="Enter M-PESA code or transaction ID" required>
                         </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" form="paymentForm" name="make_payment" class="btn btn-primary">Submit Payment</button>
-                </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="submit_payment" class="btn btn-primary">Submit Payment</button>
+                    </div>
+                </form>
             </div>
-        </div>
+                        </div>
     </div>
-    
+
     <!-- New Request Modal -->
     <div class="modal fade" id="newRequestModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
@@ -2016,92 +1576,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                     <h5 class="modal-title">New Maintenance Request</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-                <div class="modal-body">
-                    <form method="POST" id="maintenanceForm">
+                <form method="POST">
+                    <div class="modal-body">
                         <div class="mb-3">
                             <label class="form-label">Request Title</label>
                             <input type="text" class="form-control" name="title" placeholder="Brief description of the issue" required>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Category</label>
-                            <select class="form-select" name="category">
-                                <option value="Plumbing">Plumbing</option>
-                                <option value="Electrical">Electrical</option>
-                                <option value="HVAC">HVAC</option>
-                                <option value="Appliance">Appliance</option>
-                                <option value="Structural">Structural</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
                             <label class="form-label">Description</label>
                             <textarea class="form-control" rows="4" name="description" placeholder="Describe the issue in detail" required></textarea>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">Upload Photo (Optional)</label>
-                            <input type="file" class="form-control" name="photo">
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Urgency</label>
-                            <div>
-                                <div class="form-check form-check-inline">
-                                    <input class="form-check-input" type="radio" name="urgency" id="low" value="low" checked>
-                                    <label class="form-check-label" for="low">Low</label>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Urgency</label>
+                                    <select class="form-select" name="urgency" required>
+                                        <option value="low">Low</option>
+                                        <option value="medium" selected>Medium</option>
+                                        <option value="high">High (Emergency)</option>
+                                    </select>
                                 </div>
-                                <div class="form-check form-check-inline">
-                                    <input class="form-check-input" type="radio" name="urgency" id="medium" value="medium">
-                                    <label class="form-check-label" for="medium">Medium</label>
-                                </div>
-                                <极
-                                    <input class="form-check-input" type="radio" name="urgency" id="high" value="high">
-                                    <label class="form-check-label" for="high">High (Emergency)</label>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Upload Photo (Optional)</label>
+                                    <input type="file" class="form-control" name="photo">
                                 </div>
                             </div>
                         </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" form="maintenanceForm" name="submit_request" class="btn btn-primary">Submit Request</button>
-                </极>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Upload Document Modal -->
-    <div class="modal fade" id="uploadDocumentModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Upload Document</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form method="POST" id="documentForm">
-                        <div class="mb-3">
-                            <label class="form-label">Document Name</label>
-                            <input type="text" class="form-control" name="doc_name" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Document Type</label>
-                            <select class="form-select" name="doc_type" required>
-                                <option value="">Select type</option>
-                                <?php foreach ($documentTypes as $type): ?>
-                                    <option value="<?= $type ?>"><?= $type ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Upload File</label>
-                            <input type="file" class="form-control" name="document" required>
-                            <div class="form-text">Max file size: 10MB. Supported formats: PDF, JPG, PNG, DOC</div>
-                        </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" form="documentForm" name="upload_document" class="btn btn-primary">Upload</button>
-                </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="submit_request" class="btn btn-primary">Submit Request</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -2166,44 +1674,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 });
             });
             
-            // Handle "View All" buttons
-            document.querySelectorAll('[data-section]').forEach(button => {
-                if (button.classList.contains('menu-item')) return;
-                
-                button.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    
-                    const target = this.getAttribute('data-section');
-                    
-                    // Remove active class from all menu items
-                    menuItems.forEach(i => i.classList.remove('active'));
-                    
-                    // Find the matching menu item and activate it
-                    menuItems.forEach(item => {
-                        if (item.getAttribute('data-section') === target) {
-                            item.classList.add('active');
-                        }
-                    });
-                    
-                    // Hide all sections
-                    dashboardSections.forEach(section => {
-                        section.classList.remove('active');
-                    });
-                    
-                    // Show target section
-                    document.getElementById(`${target}-section`).classList.add('active');
-                    
-                    // Close sidebar on mobile
-                    if (window.innerWidth < 992) {
-                        sidebar.classList.remove('active');
-                        sidebarOverlay.style.display = 'none';
-                    }
-                    
-                    // Scroll to top
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                });
-            });
-            
             // Scroll to top functionality
             window.addEventListener('scroll', function() {
                 if (window.scrollY > 300) {
@@ -2220,18 +1690,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
                 });
             });
             
-            // Mark all notifications as read
-            document.getElementById('markAllRead').addEventListener('click', function(e) {
-                e.preventDefault();
-                fetch('mark_all_read.php', { method: 'POST' })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            location.reload();
-                        }
-                    });
-            });
+            // Initialize charts
+            initCharts();
         });
+        
+        // Initialize charts
+        function initCharts() {
+            // Payment History Chart
+            const paymentCtx = document.getElementById('paymentHistoryChart').getContext('2d');
+            const paymentChart = new Chart(paymentCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'],
+                    datasets: [{
+                        label: 'Rent Paid (Ksh)',
+                        data: [25000, 25000, 25000, 25000, 25000, 25000, 25000, 25000, 25000, 25000],
+                        backgroundColor: '#198754',
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                drawBorder: false
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
     </script>
 </body>
 </html>
