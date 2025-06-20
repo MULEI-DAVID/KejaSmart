@@ -1,5 +1,4 @@
 <?php
-// Database configuration
 define('DB_HOST', 'localhost');
 define('DB_USER', 'root');
 define('DB_PASS', 'password');
@@ -1111,7 +1110,7 @@ unset($_SESSION['first_login']);
             <i class="fas fa-bars"></i>
         </button>
         
-        <a href="#" class="logo">
+        <a href="index.html" class="logo">
             <i class="fas fa-home"></i> KejaSmart
         </a>
         

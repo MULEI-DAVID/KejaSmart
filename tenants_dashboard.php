@@ -1,8 +1,6 @@
 <?php
-// Tenant Dashboard Implementation
 session_start();
 
-// Database configuration
 define('DB_HOST', 'localhost');
 define('DB_USER', 'root');
 define('DB_PASS', 'password');
@@ -24,8 +22,8 @@ try {
 if (!isset($_SESSION['tenant_id'])) {
     // Simulate tenant login for demo purposes
     $_SESSION['tenant_id'] = 1;
-    $_SESSION['tenant_name'] = 'John Kamau';
-    $_SESSION['tenant_email'] = 'john@example.com';
+    $_SESSION['tenant_name'] = '';
+    $_SESSION['tenant_email'] = '';
     $_SESSION['property_id'] = 1;
 }
 
@@ -815,7 +813,7 @@ if (!in_array($section, $validSections)) {
             <i class="fas fa-bars"></i>
         </button>
         
-        <a href="#" class="logo">
+        <a href="index.html" class="logo">
             <i class="fas fa-home"></i> KejaSmart
         </a>
         

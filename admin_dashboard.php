@@ -1084,7 +1084,7 @@ unset($_SESSION['first_login']);
             <i class="fas fa-bars"></i>
         </button>
         
-        <a href="#" class="logo">
+        <a href="index.html" class="logo">
             <i class="fas fa-home"></i> KejaSmart
         </a>
         
