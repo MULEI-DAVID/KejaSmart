@@ -8,7 +8,7 @@ define('DB_CHARSET', 'utf8mb4');
 
 // Application Settings
 define('APP_NAME', 'KejaSmart');
-define('APP_URL', 'http://localhost/kejasmart');
+define('APP_URL','http://kejasmart.test/');
 define('APP_ENV', 'development');
 
 // Security Settings
@@ -34,44 +34,52 @@ try {
     die("System temporarily unavailable. Please try again later.");
 }
 
-// Session Configuration
-session_set_cookie_params([
-    'lifetime' => 86400,
-    'path' => '/',
-    'domain' => '',
-    'secure' => (APP_ENV === 'production'),
-    'httponly' => true,
-    'samesite' => 'Strict'
-]);
-
-session_start();
-
-// Admin authentication
-if (!isset($_SESSION['admin_id'])) {
-    header("Location: login.php");
-    exit();
+// Session Configuration for LOCALHOST - MUST BE BEFORE session_start()
+if (session_status() === PHP_SESSION_NONE) {
+    session_set_cookie_params([
+        'lifetime' => 86400,
+        'path' => '/',
+        'domain' => '',
+        'secure' => false, // Changed to false for localhost
+        'httponly' => true,
+        'samesite' => 'Strict'
+    ]);
+    
+    session_start();
 }
 
-// Fetch admin data
-$admin = [];
-try {
-    $stmt = $conn->prepare("SELECT id, name, email, role, join_date FROM admins WHERE id = :id");
-    $stmt->bindValue(':id', $_SESSION['admin_id'], PDO::PARAM_INT);
-    $stmt->execute();
-    
-    if ($stmt->rowCount() === 1) {
-        $admin = $stmt->fetch();
-        $admin['avatar'] = substr($admin['name'], 0, 1) . 
-                          (($spacePos = strpos($admin['name'], ' ')) !== false ? 
-                          substr($admin['name'], $spacePos + 1, 1) : '');
-    } else {
-        session_destroy();
+// Admin authentication check
+if (!isset($_SESSION['admin_id']) && basename($_SERVER['PHP_SELF']) !== 'login.php' && basename($_SERVER['PHP_SELF']) !== 'register.php') {
+    // Only redirect to login if not already on login page
+    if (basename($_SERVER['PHP_SELF']) !== 'login.php') {
         header("Location: login.php");
         exit();
     }
-} catch (PDOException $e) {
-    error_log("Admin fetch error: " . $e->getMessage());
-    die("System error occurred. Please try again later.");
+}
+
+// Fetch admin data if logged in
+$admin = [];
+if (isset($_SESSION['admin_id'])) {
+    try {
+        $stmt = $conn->prepare("SELECT id, name, email, role, join_date FROM admins WHERE id = :id");
+        $stmt->bindValue(':id', $_SESSION['admin_id'], PDO::PARAM_INT);
+        $stmt->execute();
+        
+        if ($stmt->rowCount() === 1) {
+            $admin = $stmt->fetch();
+            $admin['avatar'] = substr($admin['name'], 0, 1) . 
+                              (($spacePos = strpos($admin['name'], ' ')) !== false ? 
+                              substr($admin['name'], $spacePos + 1, 1) : '');
+        } else {
+            // Invalid session, destroy it
+            session_destroy();
+            header("Location: login.php");
+            exit();
+        }
+    } catch (PDOException $e) {
+        error_log("Admin fetch error: " . $e->getMessage());
+        die("System error occurred. Please try again later.");
+    }
 }
 
 // Initialize dashboard statistics
@@ -85,29 +93,31 @@ $stats = [
     'mpesa_transactions' => 0
 ];
 
-// Fetch statistics
-$queries = [
-    'landlords' => "SELECT COUNT(*) AS total FROM landlords",
-    'tenants' => "SELECT COUNT(*) AS total FROM tenants",
-    'properties' => "SELECT COUNT(*) AS total FROM properties",
-    'active_leases' => "SELECT COUNT(*) AS total FROM leases WHERE status = 'active'",
-    'pending_tickets' => "SELECT COUNT(*) AS total FROM support_tickets WHERE status = 'open'",
-    'monthly_revenue' => "SELECT SUM(amount) AS total FROM payments WHERE MONTH(payment_date) = MONTH(CURRENT_DATE())",
-    'mpesa_transactions' => "SELECT COUNT(*) AS total FROM mpesa_transactions"
-];
+// Fetch statistics only if admin is logged in
+if (isset($_SESSION['admin_id'])) {
+    $queries = [
+        'landlords' => "SELECT COUNT(*) AS total FROM landlords",
+        'tenants' => "SELECT COUNT(*) AS total FROM tenants",
+        'properties' => "SELECT COUNT(*) AS total FROM properties",
+        'active_leases' => "SELECT COUNT(*) AS total FROM leases WHERE status = 'active'",
+        'pending_tickets' => "SELECT COUNT(*) AS total FROM support_tickets WHERE status = 'open'",
+        'monthly_revenue' => "SELECT SUM(amount) AS total FROM payments WHERE MONTH(payment_date) = MONTH(CURRENT_DATE())",
+        'mpesa_transactions' => "SELECT COUNT(*) AS total FROM mpesa_transactions"
+    ];
 
-foreach ($queries as $key => $sql) {
-    try {
-        $stmt = $conn->query($sql);
-        $row = $stmt->fetch();
-        $stats[$key] = $row['total'] ?? 0;
-    } catch (PDOException $e) {
-        error_log("Statistics error ($key): " . $e->getMessage());
+    foreach ($queries as $key => $sql) {
+        try {
+            $stmt = $conn->query($sql);
+            $row = $stmt->fetch();
+            $stats[$key] = $row['total'] ?? 0;
+        } catch (PDOException $e) {
+            error_log("Statistics error ($key): " . $e->getMessage());
+        }
     }
 }
 
-// Handle form submissions
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// Handle form submissions (only if admin is logged in)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SESSION['admin_id'])) {
     // Add Landlord
     if (isset($_POST['add_landlord'])) {
         $name = trim($_POST['name']);
@@ -257,56 +267,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit();
 }
 
-// Fetch data for display
-$data_sets = [
-    'landlords' => "SELECT id, name, email, phone, 
-                   (SELECT COUNT(*) FROM properties WHERE owner_id = landlords.id) AS properties,
-                   status, join_date 
-                   FROM landlords ORDER BY join_date DESC LIMIT 10",
-    
-    'tenants' => "SELECT t.id, t.name, t.email, t.phone, p.name AS property, 
-                 t.unit, t.status, t.lease_end 
-                 FROM tenants t 
-                 JOIN properties p ON t.property_id = p.id 
-                 ORDER BY lease_end DESC LIMIT 10",
-    
-    'properties' => "SELECT p.id, p.name, p.location, l.name AS owner, 
-                    p.units, p.status,
-                    (SELECT COUNT(*) FROM units u WHERE u.property_id = p.id AND u.status = 'occupied') AS occupied,
-                    p.type
-                    FROM properties p
-                    JOIN landlords l ON p.owner_id = l.id
-                    ORDER BY p.id DESC LIMIT 10",
-    
-    'payments' => "SELECT p.id, p.payment_date, t.name AS tenant_name, 
-                  pr.name AS property, p.amount, p.method 
-                  FROM payments p
-                  JOIN tenants t ON p.tenant_id = t.id
-                  JOIN properties pr ON t.property_id = pr.id
-                  ORDER BY payment_date DESC LIMIT 10",
-    
-    'maintenance' => "SELECT mr.id, mr.created_at, p.name AS property, 
-                     mr.unit, mr.description, mr.urgency, mr.status 
-                     FROM maintenance_requests mr
-                     JOIN properties p ON mr.property_id = p.id
-                     ORDER BY created_at DESC LIMIT 10",
-    
-    'tickets' => "SELECT id, created_at, subject, user_email, priority, status 
-                 FROM support_tickets ORDER BY created_at DESC LIMIT 10",
-    
-    'mpesa' => "SELECT transaction_id, transaction_date, amount, sender_phone, 
-               recipient, property, status 
-               FROM mpesa_transactions ORDER BY transaction_date DESC LIMIT 10"
-];
-
+// Fetch data for display (only if admin is logged in)
 $display_data = [];
-foreach ($data_sets as $key => $sql) {
-    try {
-        $stmt = $conn->query($sql);
-        $display_data[$key] = $stmt->fetchAll();
-    } catch (PDOException $e) {
-        error_log("Data fetch error ($key): " . $e->getMessage());
-        $display_data[$key] = [];
+if (isset($_SESSION['admin_id'])) {
+    $data_sets = [
+        'landlords' => "SELECT id, name, email, phone, 
+                       (SELECT COUNT(*) FROM properties WHERE owner_id = landlords.id) AS properties,
+                       status, join_date 
+                       FROM landlords ORDER BY join_date DESC LIMIT 10",
+        
+        'tenants' => "SELECT t.id, t.name, t.email, t.phone, p.name AS property, 
+                     t.unit, t.status, t.lease_end 
+                     FROM tenants t 
+                     JOIN properties p ON t.property_id = p.id 
+                     ORDER BY lease_end DESC LIMIT 10",
+        
+        'properties' => "SELECT p.id, p.name, p.location, l.name AS owner, 
+                        p.units, p.status,
+                        (SELECT COUNT(*) FROM units u WHERE u.property_id = p.id AND u.status = 'occupied') AS occupied,
+                        p.type
+                        FROM properties p
+                        JOIN landlords l ON p.owner_id = l.id
+                        ORDER BY p.id DESC LIMIT 10",
+        
+        'payments' => "SELECT p.id, p.payment_date, t.name AS tenant_name, 
+                      pr.name AS property, p.amount, p.method 
+                      FROM payments p
+                      JOIN tenants t ON p.tenant_id = t.id
+                      JOIN properties pr ON t.property_id = pr.id
+                      ORDER BY payment_date DESC LIMIT 10",
+        
+        'maintenance' => "SELECT mr.id, mr.created_at, p.name AS property, 
+                         mr.unit, mr.description, mr.urgency, mr.status 
+                         FROM maintenance_requests mr
+                         JOIN properties p ON mr.property_id = p.id
+                         ORDER BY created_at DESC LIMIT 10",
+        
+        'tickets' => "SELECT id, created_at, subject, user_email, priority, status 
+                     FROM support_tickets ORDER BY created_at DESC LIMIT 10",
+        
+        'mpesa' => "SELECT transaction_id, transaction_date, amount, sender_phone, 
+                   recipient, property, status 
+                   FROM mpesa_transactions ORDER BY transaction_date DESC LIMIT 10"
+    ];
+
+    foreach ($data_sets as $key => $sql) {
+        try {
+            $stmt = $conn->query($sql);
+            $display_data[$key] = $stmt->fetchAll();
+        } catch (PDOException $e) {
+            error_log("Data fetch error ($key): " . $e->getMessage());
+            $display_data[$key] = [];
+        }
     }
 }
 

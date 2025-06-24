@@ -1,7 +1,3 @@
--- KejaSmart Database Schema
--- Version: 2.0
--- Last Updated: 2023-08-20
-
 CREATE DATABASE IF NOT EXISTS kejasmart;
 USE kejasmart;
 

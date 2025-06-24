@@ -1,23 +1,26 @@
 <?php
-// Secure session settings
+// Secure session settings for LOCALHOST development
 session_set_cookie_params([
     'lifetime' => 0,
     'path' => '/',
     'domain' => '',
-    'secure' => true,
+    'secure' => false, // Changed to false for localhost
     'httponly' => true,
     'samesite' => 'Strict'
 ]);
-ini_set('session.cookie_secure', 1);
+
+// Remove these for localhost development
+// ini_set('session.cookie_secure', 1); // Comment out for localhost
 ini_set('session.cookie_httponly', 1);
 ini_set('session.use_strict_mode', 1);
 session_start();
 
-// Security headers
+// Modified security headers for localhost
 header("X-Frame-Options: DENY");
 header("X-Content-Type-Options: nosniff");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com");
+// Relaxed CSP for localhost development
+header("Content-Security-Policy: default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com");
 
 require_once 'config.php';
 
@@ -37,25 +40,26 @@ if (isset($_COOKIE['remember_email'])) {
 
 // Rate-limiting: check failed attempts (both by email and IP)
 function isLockedOut($conn, $email, $ip) {
-    // Check by email
-    $stmt = $conn->prepare("SELECT COUNT(*) FROM login_attempts WHERE (email = ? OR ip_address = ?) AND success = 0 AND attempt_time > (NOW() - INTERVAL 15 MINUTE)");
-    $stmt->bind_param("ss", $email, $ip);
-    $stmt->execute();
-    $stmt->bind_result($attempts);
-    $stmt->fetch();
-    $stmt->close();
-    
-    if ($attempts >= 5) {
-        return true;
+    try {
+        $stmt = $conn->prepare("SELECT COUNT(*) FROM login_attempts WHERE (email = ? OR ip_address = ?) AND success = 0 AND attempt_time > (NOW() - INTERVAL 15 MINUTE)");
+        $stmt->execute([$email, $ip]);
+        $attempts = $stmt->fetchColumn();
+        
+        if ($attempts >= 5) {
+            return true;
+        }
+        
+        // Progressive delay for 2-4 failed attempts
+        if ($attempts >= 2) {
+            $delay = min(($attempts - 1) * 2, 6); // Reduced delay for development: 2, 4, 6 seconds
+            sleep($delay);
+        }
+        
+        return false;
+    } catch (PDOException $e) {
+        error_log("Rate limiting check error: " . $e->getMessage());
+        return false; // Don't block on database errors
     }
-    
-    // Progressive delay for 2-4 failed attempts
-    if ($attempts >= 2) {
-        $delay = min(($attempts - 1) * 5, 15); // 5, 10, 15 seconds
-        sleep($delay);
-    }
-    
-    return false;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -73,77 +77,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             // Check in all user tables (admin, landlord, tenant)
             $validUserTypes = [
-                ['table' => 'admins', 'redirect' => 'admin_dashboard.php'],
-                ['table' => 'landlords', 'redirect' => 'landlord_dashboard.php'],
-                ['table' => 'tenants', 'redirect' => 'tenant_dashboard.php']
+                ['table' => 'admins', 'redirect' => 'admin_dashboard.php', 'session_key' => 'admin_id'],
+                ['table' => 'landlords', 'redirect' => 'landlord_dashboard.php', 'session_key' => 'landlord_id'],
+                ['table' => 'tenants', 'redirect' => 'tenant_dashboard.php', 'session_key' => 'tenant_id']
             ];
 
             $loginSuccess = false;
-            $genericError = "Invalid email or password."; // Generic error message
+            $genericError = "Invalid email or password.";
 
             foreach ($validUserTypes as $userType) {
-                // Validate table name against whitelist
-                if (!in_array($userType['table'], ['admins', 'landlords', 'tenants'])) {
+                try {
+                    $stmt = $conn->prepare("SELECT id, password, status FROM " . $userType['table'] . " WHERE email = ?");
+                    $stmt->execute([$email]);
+                    
+                    if ($stmt->rowCount() === 1) {
+                        $user = $stmt->fetch();
+
+                        if ($userType['table'] === 'landlords' && $user['status'] !== 'approved') {
+                            $errors[] = "Landlord account pending approval.";
+                            break;
+                        } elseif (password_verify($password, $user['password'])) {
+                            // Regenerate session ID to prevent session fixation
+                            session_regenerate_id(true);
+
+                            // Success - Set appropriate session variables
+                            $_SESSION['user_id'] = $user['id'];
+                            $_SESSION[$userType['session_key']] = $user['id']; // This matches your dashboard check
+                            $_SESSION['user_type'] = $userType['table'];
+                            $_SESSION['email'] = $email;
+                            $_SESSION['last_activity'] = time();
+
+                            if ($remember) {
+                                setcookie("remember_email", $email, [
+                                    'expires' => time() + (86400 * 30),
+                                    'path' => '/',
+                                    'secure' => false, // Changed for localhost
+                                    'httponly' => true,
+                                    'samesite' => 'Strict'
+                                ]);
+                            } else {
+                                setcookie("remember_email", "", [
+                                    'expires' => time() - 3600,
+                                    'path' => '/'
+                                ]);
+                            }
+
+                            // Log success
+                            try {
+                                $logStmt = $conn->prepare("INSERT INTO login_attempts (email, ip_address, success, attempt_time) VALUES (?, ?, 1, NOW())");
+                                $logStmt->execute([$email, $ip_address]);
+                            } catch (PDOException $e) {
+                                error_log("Login success log error: " . $e->getMessage());
+                            }
+
+                            $loginSuccess = true;
+                            header("Location: " . $userType['redirect']);
+                            exit();
+                        }
+                    }
+                } catch (PDOException $e) {
+                    error_log("Login query error: " . $e->getMessage());
                     continue;
                 }
-
-                $stmt = $conn->prepare("SELECT id, password, status FROM " . $userType['table'] . " WHERE email = ?");
-                $stmt->bind_param("s", $email);
-                $stmt->execute();
-                $stmt->store_result();
-
-                if ($stmt->num_rows === 1) {
-                    $stmt->bind_result($id, $hashed_password, $status);
-                    $stmt->fetch();
-
-                    if ($userType['table'] === 'landlords' && $status !== 'approved') {
-                        $errors[] = "Landlord account pending approval.";
-                    } elseif (password_verify($password, $hashed_password)) {
-                        // Regenerate session ID to prevent session fixation
-                        session_regenerate_id(true);
-
-                        // Success
-                        $_SESSION['user_id'] = $id;
-                        $_SESSION['user_type'] = $userType['table'];
-                        $_SESSION['email'] = $email;
-                        $_SESSION['last_activity'] = time();
-
-                        if ($remember) {
-                            setcookie("remember_email", $email, [
-                                'expires' => time() + (86400 * 30),
-                                'path' => '/',
-                                'secure' => true,
-                                'httponly' => true,
-                                'samesite' => 'Strict'
-                            ]);
-                        } else {
-                            setcookie("remember_email", "", [
-                                'expires' => time() - 3600,
-                                'path' => '/'
-                            ]);
-                        }
-
-                        // Log success with IP
-                        $logStmt = $conn->prepare("INSERT INTO login_attempts (email, ip_address, success) VALUES (?, ?, 1)");
-                        $logStmt->bind_param("ss", $email, $ip_address);
-                        $logStmt->execute();
-                        $logStmt->close();
-
-                        header("Location: " . $userType['redirect']);
-                        exit();
-                    }
-                }
-                $stmt->close();
             }
 
-            if (empty($errors)) {
-                // Log failed attempt with IP
-                $logStmt = $conn->prepare("INSERT INTO login_attempts (email, ip_address, success) VALUES (?, ?, 0)");
-                $logStmt->bind_param("ss", $email, $ip_address);
-                $logStmt->execute();
-                $logStmt->close();
+            if (!$loginSuccess && empty($errors)) {
+                // Log failed attempt
+                try {
+                    $logStmt = $conn->prepare("INSERT INTO login_attempts (email, ip_address, success, attempt_time) VALUES (?, ?, 0, NOW())");
+                    $logStmt->execute([$email, $ip_address]);
+                } catch (PDOException $e) {
+                    error_log("Login failure log error: " . $e->getMessage());
+                }
                 
-                // Use generic error message to avoid revealing if email exists
                 $errors[] = $genericError;
             }
         }
@@ -241,7 +247,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
       <?php if (!empty($errors)): ?>
         <div class="alert alert-danger">
-          <?php foreach ($errors as $error) echo "<div>$error</div>"; ?>
+          <?php foreach ($errors as $error): ?>
+            <div><?= htmlspecialchars($error) ?></div>
+          <?php endforeach; ?>
         </div>
       <?php endif; ?>
 
