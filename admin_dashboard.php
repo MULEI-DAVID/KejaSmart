@@ -101,7 +101,7 @@ $queries = [
     'properties' => "SELECT COUNT(*) AS total FROM properties",
     'active_leases' => "SELECT COUNT(*) AS total FROM leases WHERE status = 'active'",
     'pending_tickets' => "SELECT COUNT(*) AS total FROM support_tickets WHERE status = 'open'",
-    'monthly极_revenue' => "SELECT SUM(amount) AS total FROM payments WHERE MONTH(payment_date) = MONTH(CURRENT_DATE())",
+    'monthly_revenue' => "SELECT SUM(amount) AS total FROM payments WHERE MONTH(payment_date) = MONTH(CURRENT_DATE())",
     'mpesa_transactions' => "SELECT COUNT(*) AS total FROM mpesa_transactions"
 ];
 
