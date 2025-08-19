@@ -10,27 +10,89 @@
   <style>
     body {
       font-family: 'Segoe UI', sans-serif;
+      transition: background-color 0.3s, color 0.3s;
     }
+    
+    /* Dark mode styles */
+    body.dark-mode {
+      background-color: #121212;
+      color: #f8f9fa;
+    }
+    
+    body.dark-mode .navbar {
+      background-color: #1e1e1e !important;
+      border-bottom: 1px solid #333;
+    }
+    
+    body.dark-mode .navbar-brand,
+    body.dark-mode .nav-link {
+      color: #f8f9fa !important;
+    }
+    
+    body.dark-mode .card,
+    body.dark-mode .bg-light {
+      background-color: #1e1e1e !important;
+      color: #f8f9fa;
+      border-color: #333;
+    }
+    
+    body.dark-mode .features .card,
+    body.dark-mode .hover-box {
+      border-left: 4px solid #0d6efd;
+    }
+    
+    body.dark-mode .bg-success {
+      background-color: #0d6efd !important;
+    }
+    
+    body.dark-mode footer {
+      background-color: #1a1a1a !important;
+    }
+    
+    body.dark-mode .accordion-button {
+      background-color: #1e1e1e;
+      color: #f8f9fa;
+    }
+    
+    body.dark-mode .accordion-body {
+      background-color: #2d2d2d;
+      color: #f8f9fa;
+    }
+    
+    body.dark-mode .btn-outline-success {
+      color: #0d6efd;
+      border-color: #0d6efd;
+    }
+    
+    body.dark-mode .btn-outline-success:hover {
+      background-color: #0d6efd;
+      color: white;
+    }
+    
+    /* Light mode styles */
     .hero {
-  background: url('images/heroimage.jpg') center center/cover no-repeat;
-  height: 100vh;
-  color: black;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-.hero, .hero h1, .hero p, .hero span, .hero a {
-  color: black;
-}
+      background: url('images/heroimage.jpg') center center/cover no-repeat;
+      height: 100vh;
+      color: black;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      text-align: center;
+    }
+    .hero, .hero h1, .hero p, .hero span, .hero a {
+      color: black;
+    }
+    
     .features .card, .hover-box {
       transition: transform 0.3s ease, box-shadow 0.3s ease;
       border-left: 4px solid lightgreen;
     }
+    
     .features .card:hover, .hover-box:hover {
       transform: translateY(-10px);
       box-shadow: 0 8px 20px rgba(0,0,0,0.2);
     }
+    
     .scroll-up {
       position: fixed;
       bottom: 20px;
@@ -44,9 +106,24 @@
       display: none;
       z-index: 1000;
     }
+    
+    body.dark-mode .scroll-up {
+      background: #0d6efd;
+      color: white;
+    }
+    
     footer {
       background-color: #111;
       color: white;
+    }
+    
+    .theme-toggle-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 1.2rem;
+      margin-left: 15px;
+      color: inherit;
     }
   </style>
 </head>
@@ -70,6 +147,9 @@
           <div class="d-flex">
             <a href="login.php" class="btn btn-outline-success me-2">Login</a>
             <a href="register.php" class="btn btn-success">Sign Up</a>
+            <button class="theme-toggle-btn" id="themeToggle">
+              <i class="fas fa-moon"></i>
+            </button>
           </div>
         </div>
       </div>
@@ -77,11 +157,11 @@
   </nav>
 
   <!-- Hero Section -->
- <section class="hero d-flex align-items-center position-relative">
-  <div class="overlay position-absolute top-0 start-0 w-100 h-100" style="background-color: rgba(255,255,255,0.5); z-index: 1;"></div>
-  <div class="container position-relative z-2">
-    <h1 class="display-4 fw-bold">Welcome to KejaSmart</h1>
-    <p class="lead">Your Keja, Your Rules – Smart & Easy</p>
+  <section class="hero d-flex align-items-center position-relative">
+    <div class="overlay position-absolute top-0 start-0 w-100 h-100" style="background-color: rgba(255,255,255,0.5); z-index: 1;"></div>
+    <div class="container position-relative z-2">
+      <h1 class="display-4 fw-bold">Welcome to KejaSmart</h1>
+      <p class="lead">Your Keja, Your Rules – Smart & Easy</p>
       <a href="register.php" class="btn btn-lg btn-success">Get Started</a>
     </div>
   </section>
@@ -182,7 +262,7 @@
         </div>
         <div class="accordion-item">
           <h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq5">What happens after I register?</button></h2>
-          <div id="faq5" class="accordion-collapse collapse" data-bs-parent="#faqAccordion"><div class="accordion-body">You’ll be redirected to login, then into your personalized dashboard.</div></div>
+          <div id="faq5" class="accordion-collapse collapse" data-bs-parent="#faqAccordion"><div class="accordion-body">You'll be redirected to login, then into your personalized dashboard.</div></div>
         </div>
         <div class="accordion-item">
           <h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq6">Can I view rent history?</button></h2>
@@ -248,6 +328,33 @@
     scrollBtn.onclick = () => {
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
+    
+    // Dark mode functionality
+    const themeToggle = document.getElementById('themeToggle');
+    const body = document.body;
+    
+    // Check for saved theme preference or respect OS preference
+    const savedTheme = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    
+    // Set initial theme
+    if (savedTheme === 'dark' || (!savedTheme && prefersDark)) {
+      body.classList.add('dark-mode');
+      themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
+    }
+    
+    // Toggle theme
+    themeToggle.addEventListener('click', () => {
+      body.classList.toggle('dark-mode');
+      
+      if (body.classList.contains('dark-mode')) {
+        localStorage.setItem('theme', 'dark');
+        themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
+      } else {
+        localStorage.setItem('theme', 'light');
+        themeToggle.innerHTML = '<i class="fas fa-moon"></i>';
+      }
+    });
   </script>
 </body>
 </html>
